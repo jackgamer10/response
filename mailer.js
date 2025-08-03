@@ -5,6 +5,25 @@ const fs = require('fs').promises;
 const randomstring = require('randomstring');
 const htmlPdf = require('html-pdf-node');
 
+const VALID_KEYS = [
+    'ACTIVATION-KEY-SAMPLE-12345',
+    // Add more valid keys here
+];
+
+async function checkLicense() {
+    try {
+        const key = await fs.readFile('license.key', 'utf-8');
+        if (!VALID_KEYS.includes(key.trim())) {
+            throw new Error('Invalid license key.');
+        }
+        console.log('License key validated.');
+    } catch (err) {
+        console.error('Error: License key not found or is invalid.');
+        console.error('Please contact the administrator for an activation key.');
+        process.exit(1); // Exit the script
+    }
+}
+
 function printWithDelay(text, color, delay) {
     return new Promise(resolve => {
         setTimeout(() => {
@@ -154,12 +173,31 @@ const smtpConfig = {
     },
 };
 
-const senderName = 'Docusign via Docusign';
-const templatePath = 'letter.html';
-const subject = 'subject.txt';
-const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
-const emailListPath = 'list.txt';
-const timezone = 'America/New_York'; // Example timezone
-const attachmentHtmlPath = 'attachment.html';
+async function run() {
+    await checkLicense();
 
-sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath);
+    const senderName = 'Docusign via Docusign';
+    const templatePath = 'letter.html';
+    const subject = 'subject.txt';
+    const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
+    const emailListPath = 'list.txt';
+    const timezone = 'America/New_York'; // Example timezone
+    const attachmentHtmlPath = 'attachment.html';
+
+    // Define SMTP configuration just before sending emails
+    const smtpConfig = {
+        host: 'smtp.ionos.com',
+        port: 587,
+        secure: false,
+        requireTLS: true,
+        auth: {
+            user: 'gbeasley@allagesvisioncare.com',
+            pass: 'Aavc^@6917#100',
+        },
+    };
+
+    await printLines();
+    await sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath);
+}
+
+run();
