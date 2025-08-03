@@ -46,31 +46,35 @@ async function checkSMTP(data) {
     }
 }
 
-async function readTemplate(templatePath, replacements) {
+function replaceTags(text, replacements, timezone) {
+    let newText = text;
+    // Replace email-related tags
+    newText = newText.replace(/\[-email-\]/g, replacements['-email-']);
+    newText = newText.replace(/\[-emailuser-\]/g, replacements['-emailuser-']);
+    newText = newText.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-']);
+
+    // Replace time-related tag
+    newText = newText.replace(/\[-time-\]/g, getCurrentTime(timezone, 'fulltime12'));
+
+    // Replace random string tag
+    newText = newText.replace(/\[-randomstring-\]/g, randomstring.generate());
+
+    // Replace random number tag
+    newText = newText.replace(/\[-randomnumber-\]/g, Math.floor(Math.random() * 10));
+
+    // Replace random letters tag
+    newText = newText.replace(/\[-randomletters-\]/g, randomstring.generate({ charset: 'alphabetic' }));
+
+    // Replace random MD5 tag
+    newText = newText.replace(/\[-randommd5-\]/g, require('crypto').createHash('md5').update(randomstring.generate()).digest('hex'));
+
+    return newText;
+}
+
+async function readTemplate(templatePath, replacements, timezone) {
     try {
-        let template = await fs.readFile(templatePath, 'utf-8');
-
-        // Replace email-related tags
-        template = template.replace(/\[-email-\]/g, replacements['-email-']);
-        template = template.replace(/\[-emailuser-\]/g, replacements['-emailuser-']);
-        template = template.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-']);
-
-        // Replace time-related tag
-        template = template.replace(/\[-time-\]/g, getCurrentTime(timezone, 'fulltime12'));
-
-        // Replace random string tag
-        template = template.replace(/\[-randomstring-\]/g, randomstring.generate());
-
-        // Replace random number tag
-        template = template.replace(/\[-randomnumber-\]/g, Math.floor(Math.random() * 10));
-
-        // Replace random letters tag
-        template = template.replace(/\[-randomletters-\]/g, randomstring.generate({ charset: 'alphabetic' }));
-
-        // Replace random MD5 tag
-        template = template.replace(/\[-randommd5-\]/g, require('crypto').createHash('md5').update(randomstring.generate()).digest('hex'));
-
-        return template;
+        const template = await fs.readFile(templatePath, 'utf-8');
+        return replaceTags(template, replacements, timezone);
     } catch(err) {
         throw new Error(`Template Read Error: ${err.message}`);
     }
@@ -91,8 +95,11 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                     '-emaildomain-': email.split('@')[1],
                 };
 
-                const emailContent = await readTemplate(templatePath, replacements);
-                const emailSubject = await readTemplate(subject, replacements);
+                const emailContent = await readTemplate(templatePath, replacements, timezone);
+                const emailSubjectText = await fs.readFile(subject, 'utf-8');
+                const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
+
+                const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
 
                 const pdfBuffer = await htmlPdf.generatePdf({ content: attachmentHtmlContent }, { format: 'A4' });
 
@@ -103,7 +110,7 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                     html: emailContent,
                     attachments: [
                         {
-                            filename: pdfAttachmentName,
+                            filename: dynamicPdfName,
                             content: pdfBuffer,
                             contentType: 'application/pdf'
                         }
@@ -151,7 +158,7 @@ const smtpConfig = {
 const senderName = 'Docusign via Docusign';
 const templatePath = 'letter.html';
 const subject = 'subject.txt';
-const pdfAttachmentName = 'attachment.pdf';
+const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
 const emailListPath = 'list.txt';
 const timezone = 'America/New_York'; // Example timezone
 const attachmentHtmlPath = 'attachment.html';
