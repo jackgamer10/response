@@ -1,0 +1,17 @@
+{
+  "name": "mailer-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "mailer.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "html-pdf-node": "^1.0.8",
+    "nodemailer": "^7.0.5",
+    "randomstring": "^1.3.1"
+  }
+}
