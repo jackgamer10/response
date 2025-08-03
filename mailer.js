@@ -85,8 +85,6 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
         const transporter = await checkSMTP(smtpConfig);
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
 
-        const attachmentHtmlContent = await fs.readFile(attachmentHtmlPath, 'utf-8');
-
         for (const email of emailList) {
             if (validateEmail(email)) {
                 const replacements = {
@@ -100,6 +98,7 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                 const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
 
                 const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
+                const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements, timezone);
 
                 const pdfBuffer = await htmlPdf.generatePdf({ content: attachmentHtmlContent }, { format: 'A4' });
 
