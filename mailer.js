@@ -1,7 +1,6 @@
 'use strict';
 
 const nodemailer = require('nodemailer');
-const chalk = require('chalk');
 const fs = require('fs').promises;
 const randomstring = require('randomstring');
 const htmlPdf = require('html-pdf-node');
@@ -9,28 +8,28 @@ const htmlPdf = require('html-pdf-node');
 function printWithDelay(text, color, delay) {
     return new Promise(resolve => {
         setTimeout(() => {
-            console.log(color + text);
+            console.log(text);
             resolve();
         }, delay);
     });
 }
 
 async function printLines() {
-    await printWithDelay('Node Maghx Inbox Sender Start', '\x1b[33m', 500);
-    await printWithDelay('', '', 500);
+    await printWithDelay('Node Maghx Inbox Sender Start', null, 500);
+    await printWithDelay('', null, 500);
     await printWithDelay(`
-\x1b[36m███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗    ██╗███╗   ██╗██████╗  ██████╗ ██╗  ██╗
-\x1b[35m████╗ ████║██╔══██╗██╔════╝ ██║  ██║╚██╗██╔╝    ██║████╗  ██║██╔══██╗██╔═══██╗██║ ██╔╝
-\x1b[34m██╔████╔██║███████║██║  ███╗███████║ ╚███╔╝     ██║██╔██╗ ██║██║  ██║██║   ██║█████╔╝
-\x1b[33m██║╚██╔╝██║██╔══██║██║   ██║██╔══██║ ██╔██╗     ██║██║╚██╗██║██║  ██║██║   ██║██╔═██╗
-\x1b[32m██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗    ██║██║ ╚████║██████╔╝╚██████╔╝██║  ██╗
-\x1b[31m╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-`, '', 500);
-    await printWithDelay('[+] Node Maghx Sender v1', '\x1b[31m', 500);
-    await printWithDelay('[+] Best For All Spamming Hit Aol Yahoo Office Gmail', '\x1b[32m', 500);
-    await printWithDelay('[+] Code By Maghx Inbox', '\x1b[33m', 500);
-    await printWithDelay('[+] Configuration Check', '\x1b[32m', 500);
-    await printWithDelay('[+] Smtp Connected', '\x1b[33m', 500);
+███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗    ██╗███╗   ██╗██████╗  ██████╗ ██╗  ██╗
+████╗ ████║██╔══██╗██╔════╝ ██║  ██║╚██╗██╔╝    ██║████╗  ██║██╔══██╗██╔═══██╗██║ ██╔╝
+██╔████╔██║███████║██║  ███╗███████║ ╚███╔╝     ██║██╔██╗ ██║██║  ██║██║   ██║█████╔╝
+██║╚██╔╝██║██╔══██║██║   ██║██╔══██║ ██╔██╗     ██║██║╚██╗██║██║  ██║██║   ██║██╔═██╗
+██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗    ██║██║ ╚████║██████╔╝╚██████╔╝██║  ██╗
+╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
+`, null, 500);
+    await printWithDelay('[+] Node Maghx Sender v1', null, 500);
+    await printWithDelay('[+] Best For All Spamming Hit Aol Yahoo Office Gmail', null, 500);
+    await printWithDelay('[+] Code By Maghx Inbox', null, 500);
+    await printWithDelay('[+] Configuration Check', null, 500);
+    await printWithDelay('[+] Smtp Connected', null, 500);
 }
 
 printLines();
@@ -111,19 +110,19 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                     ]
                 });
 
-                console.log(chalk.green('=================================================='));
-                console.log(chalk.red('To               : ') + chalk.green(email));
-                console.log(chalk.red('Subject    : ') + chalk.magenta(emailSubject));
-                console.log(chalk.red('Name       : ') + chalk.white(senderName));
-                console.log(chalk.red('Smtp        : ') + chalk.yellow(smtpConfig.host));
-                console.log(chalk.red('Status      : ') + chalk.red('Sent'));
-                console.log(chalk.green('=================================================='));
+                console.log('==================================================');
+                console.log('To               : ' + email);
+                console.log('Subject    : ' + emailSubject);
+                console.log('Name       : ' + senderName);
+                console.log('Smtp        : ' + smtpConfig.host);
+                console.log('Status      : Sent');
+                console.log('==================================================');
             } else {
-                console.log(chalk.yellow(`Invalid email address: ${email}`));
+                console.log(`Invalid email address: ${email}`);
             }
         }
     } catch (err) {
-        console.error(chalk.red(`Error sending emails: ${err.message}`));
+        console.error(`Error sending emails: ${err.message}`);
     }
 }
 
