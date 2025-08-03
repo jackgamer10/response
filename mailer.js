@@ -4,24 +4,59 @@ const nodemailer = require('nodemailer');
 const fs = require('fs').promises;
 const randomstring = require('randomstring');
 const htmlPdf = require('html-pdf-node');
+const crypto = require('crypto');
+const readline = require('readline');
 
-const VALID_KEYS = [
-    'ACTIVATION-KEY-SAMPLE-12345',
-    // Add more valid keys here
+const VALID_KEY_HASHES = [
+    'a63c5c935c941551084e125791321453240578642680456106364b4c067756f9',
+    // Add more valid SHA256 key hashes here
 ];
+
+function askQuestion(query) {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+
+    return new Promise(resolve => rl.question(query, ans => {
+        rl.close();
+        resolve(ans);
+    }))
+}
 
 async function checkLicense() {
     try {
         const key = await fs.readFile('license.key', 'utf-8');
-        if (!VALID_KEYS.includes(key.trim())) {
+        const keyHash = crypto.createHash('sha256').update(key.trim()).digest('hex');
+
+        if (!VALID_KEY_HASHES.includes(keyHash)) {
             throw new Error('Invalid license key.');
         }
         console.log('License key validated.');
     } catch (err) {
-        console.error('Error: License key not found or is invalid.');
-        console.error('Please contact the administrator for an activation key.');
-        process.exit(1); // Exit the script
+        if (err.code === 'ENOENT') { // File not found
+            console.log('License key file not found.');
+            const enteredKey = await askQuestion('Please enter your license key: ');
+            const enteredKeyHash = crypto.createHash('sha256').update(enteredKey.trim()).digest('hex');
+
+            if (VALID_KEY_HASHES.includes(enteredKeyHash)) {
+                console.log('License key is valid. Saving for future use.');
+                await fs.writeFile('license.key', enteredKey.trim());
+            } else {
+                console.error('Error: The license key you entered is invalid.');
+                console.error('Please contact the administrator for an activation key.');
+                process.exit(1);
+            }
+        } else {
+            console.error('Error: License key is invalid.');
+            console.error('Please contact the administrator for an activation key.');
+            process.exit(1);
+        }
     }
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function printWithDelay(text, color, delay) {
@@ -99,7 +134,7 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath) {
+async function sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails) {
     try {
         const transporter = await checkSMTP(smtpConfig);
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
@@ -142,6 +177,9 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                 console.log('Smtp        : ' + smtpConfig.host);
                 console.log('Status      : Sent');
                 console.log('==================================================');
+
+                console.log(`Pausing for ${delayBetweenEmails / 1000} seconds...`);
+                await delay(delayBetweenEmails);
             } else {
                 console.log(`Invalid email address: ${email}`);
             }
@@ -183,6 +221,7 @@ async function run() {
     const emailListPath = 'list.txt';
     const timezone = 'America/New_York'; // Example timezone
     const attachmentHtmlPath = 'attachment.html';
+    const delayBetweenEmails = 5000; // 5 seconds
 
     // Define SMTP configuration just before sending emails
     const smtpConfig = {
@@ -197,7 +236,7 @@ async function run() {
     };
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath);
+    await sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails);
 }
 
 run();
