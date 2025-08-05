@@ -139,13 +139,16 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment) {
     try {
-        const transporter = await checkSMTP(smtpConfig);
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
+        let smtpIndex = 0;
 
         for (const email of emailList) {
             if (validateEmail(email)) {
+                const currentSmtpConfig = smtpConfigs[smtpIndex];
+                const transporter = await checkSMTP(currentSmtpConfig);
+
                 const replacements = {
                     '-email-': email,
                     '-emailuser-': email.split('@')[0],
@@ -156,32 +159,36 @@ async function sendEmails(emailListPath, smtpConfig, templatePath, subject, time
                 const emailSubjectText = await fs.readFile(subject, 'utf-8');
                 const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
 
-                const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
-                const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements, timezone);
-
-                const pdfBuffer = await htmlPdf.generatePdf({ content: attachmentHtmlContent }, { format: 'A4' });
-
-                await transporter.sendMail({
-                    from: `"${senderName}" <${smtpConfig.auth.user}>`, // Include sender name
+                const mailOptions = {
+                    from: `"${senderName}" <${currentSmtpConfig.auth.user}>`,
                     to: email,
                     subject: emailSubject,
                     html: emailContent,
-                    attachments: [
-                        {
-                            filename: dynamicPdfName,
-                            content: pdfBuffer,
-                            contentType: 'application/pdf'
-                        }
-                    ]
-                });
+                    attachments: []
+                };
+
+                if (sendPdfAttachment) {
+                    const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
+                    const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements, timezone);
+                    const pdfBuffer = await htmlPdf.generatePdf({ content: attachmentHtmlContent }, { format: 'A4' });
+                    mailOptions.attachments.push({
+                        filename: dynamicPdfName,
+                        content: pdfBuffer,
+                        contentType: 'application/pdf'
+                    });
+                }
+
+                await transporter.sendMail(mailOptions);
 
                 console.log('==================================================');
                 console.log('To               : ' + email);
                 console.log('Subject    : ' + emailSubject);
                 console.log('Name       : ' + senderName);
-                console.log('Smtp        : ' + smtpConfig.host);
+                console.log('Smtp        : ' + currentSmtpConfig.host);
                 console.log('Status      : Sent');
                 console.log('==================================================');
+
+                smtpIndex = (smtpIndex + 1) % smtpConfigs.length; // Move to the next SMTP server
 
                 console.log(`Pausing for ${delayBetweenEmails / 1000} seconds...`);
                 await delay(delayBetweenEmails);
@@ -205,16 +212,29 @@ function getCurrentTime(timezone, format) {
 }
 
 // Define SMTP configuration, template path, subject, and other parameters
-const smtpConfig = {
-    host: 'smtp.ionos.com',
-    port: 587,
-    secure: false,
-    requireTLS: true,
-    auth: {
-        user: 'gbeasley@allagesvisioncare.com',
-        pass: 'Aavc^@6917#100',
+const smtpConfigs = [
+    {
+        host: 'smtp.ionos.com',
+        port: 587,
+        secure: false,
+        requireTLS: true,
+        auth: {
+            user: 'gbeasley@allagesvisioncare.com',
+            pass: 'Aavc^@6917#100',
+        },
     },
-};
+    // Add more SMTP configurations here
+    // {
+    //     host: 'smtp.example.com',
+    //     port: 587,
+    //     secure: false,
+    //     requireTLS: true,
+    //     auth: {
+    //         user: 'user@example.com',
+    //         pass: 'password',
+    //     },
+    // }
+];
 
 async function run() {
     await checkLicense();
@@ -227,21 +247,10 @@ async function run() {
     const timezone = 'America/New_York'; // Example timezone
     const attachmentHtmlPath = 'attachment.html';
     const delayBetweenEmails = 5000; // 5 seconds
-
-    // Define SMTP configuration just before sending emails
-    const smtpConfig = {
-        host: 'smtp.ionos.com',
-        port: 587,
-        secure: false,
-        requireTLS: true,
-        auth: {
-            user: 'gbeasley@allagesvisioncare.com',
-            pass: 'Aavc^@6917#100',
-        },
-    };
+    const sendPdfAttachment = true; // Set to false to disable PDF attachments
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfig, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment);
 }
 
 run();
