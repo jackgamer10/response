@@ -139,7 +139,7 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -159,8 +159,15 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, tim
                 const emailSubjectText = await fs.readFile(subject, 'utf-8');
                 const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
 
+                let fromAddress;
+                if (hideFromEmail) {
+                    fromAddress = `"${senderName}"`; // Attempt to hide email, may not work
+                } else {
+                    fromAddress = `"${senderName}" <${currentSmtpConfig.auth.user}>`; // Standard format
+                }
+
                 const mailOptions = {
-                    from: `"${senderName}" <${currentSmtpConfig.auth.user}>`,
+                    from: fromAddress,
                     to: email,
                     subject: emailSubject,
                     html: emailContent,
@@ -248,9 +255,11 @@ async function run() {
     const attachmentHtmlPath = 'attachment.html';
     const delayBetweenEmails = 5000; // 5 seconds
     const sendPdfAttachment = true; // Set to false to disable PDF attachments
+    // WARNING: Setting hideFromEmail to true is not recommended and may cause deliverability issues.
+    const hideFromEmail = false;
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail);
 }
 
 run();
