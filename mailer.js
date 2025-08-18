@@ -139,7 +139,7 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -156,6 +156,7 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, tim
                 };
 
                 const emailContent = await readTemplate(templatePath, replacements, timezone);
+                const textContent = await readTemplate(textTemplatePath, replacements, timezone);
                 const emailSubjectText = await fs.readFile(subject, 'utf-8');
                 const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
 
@@ -172,6 +173,7 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, tim
                     to: email,
                     subject: emailSubject,
                     html: emailContent,
+                    text: textContent,
                     attachments: []
                 };
 
@@ -250,6 +252,7 @@ async function run() {
 
     const senderName = 'Docusign via Docusign';
     const templatePath = 'letter.html';
+    const textTemplatePath = 'letter.txt';
     const subject = 'subject.txt';
     const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
     const emailListPath = 'list.txt';
@@ -262,7 +265,7 @@ async function run() {
     const useCustomFromEmail = true; // Set to true to use the 'fromEmail' property in smtpConfigs
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail);
 }
 
 run();

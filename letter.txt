@@ -1,0 +1,3 @@
+Hello [-emailuser-],
+
+This is a test email.
