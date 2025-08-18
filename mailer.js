@@ -229,8 +229,8 @@ const smtpConfigs = [
         secure: false,
         requireTLS: true,
         auth: {
-            user: 'gbeasley@allagesvisioncare.com',
-            pass: 'Aavc^@6917#100',
+            user: '',
+            pass: '',
         },
         fromEmail: 'custom-from@mydomain.com' // Optional: The address to send from
     },
