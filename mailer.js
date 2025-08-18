@@ -139,7 +139,7 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -172,10 +172,14 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                     from: fromAddress,
                     to: email,
                     subject: emailSubject,
-                    html: emailContent,
-                    text: textContent,
                     attachments: []
                 };
+
+                if (sendHtmlEmail) {
+                    mailOptions.html = emailContent;
+                } else {
+                    mailOptions.text = textContent;
+                }
 
                 if (sendPdfAttachment) {
                     const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
@@ -229,8 +233,8 @@ const smtpConfigs = [
         secure: false,
         requireTLS: true,
         auth: {
-            user: '',
-            pass: '',
+            user: 'gbeasley@allagesvisioncare.com',
+            pass: 'Aavc^@6917#100',
         },
         fromEmail: 'custom-from@mydomain.com' // Optional: The address to send from
     },
@@ -263,9 +267,10 @@ async function run() {
     // WARNING: Setting hideFromEmail to true is not recommended and may cause deliverability issues.
     const hideFromEmail = false;
     const useCustomFromEmail = true; // Set to true to use the 'fromEmail' property in smtpConfigs
+    const sendHtmlEmail = true; // Set to false to send plain text email
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail);
 }
 
 run();
