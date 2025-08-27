@@ -6,6 +6,7 @@ const randomstring = require('randomstring');
 const htmlPdf = require('html-pdf-node');
 const crypto = require('crypto');
 const readline = require('readline');
+const minify = require('html-minifier').minify;
 
 const VALID_KEY_HASHES = [
     'a63c5c935c941551084e125791321453240578642680456106364b4c067756f9',
@@ -139,7 +140,7 @@ async function readTemplate(templatePath, replacements, timezone) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -184,7 +185,12 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                 if (sendPdfAttachment) {
                     const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
                     const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements, timezone);
-                    const pdfBuffer = await htmlPdf.generatePdf({ content: attachmentHtmlContent }, { format: 'A4' });
+                    const minifiedHtml = minify(attachmentHtmlContent, {
+                        removeAttributeQuotes: true,
+                        collapseWhitespace: true,
+                        removeComments: true,
+                    });
+                    const pdfBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality });
                     mailOptions.attachments.push({
                         filename: dynamicPdfName,
                         content: pdfBuffer,
@@ -268,9 +274,10 @@ async function run() {
     const hideFromEmail = false;
     const useCustomFromEmail = true; // Set to true to use the 'fromEmail' property in smtpConfigs
     const sendHtmlEmail = true; // Set to false to send plain text email
+    const pdfQuality = 75; // PDF quality from 0-100
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality);
 }
 
 run();
