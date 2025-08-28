@@ -106,15 +106,12 @@ async function checkSMTP(data) {
     }
 }
 
-function replaceTags(text, replacements, timezone) {
+function replaceTags(text, replacements) {
     let newText = text;
     // Replace email-related tags
     newText = newText.replace(/\[-email-\]/g, replacements['-email-']);
     newText = newText.replace(/\[-emailuser-\]/g, replacements['-emailuser-']);
     newText = newText.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-']);
-
-    // Replace time-related tag
-    newText = newText.replace(/\[-time-\]/g, getCurrentTime(timezone, 'fulltime12'));
 
     // Replace random string tag
     newText = newText.replace(/\[-randomstring-\]/g, randomstring.generate());
@@ -131,16 +128,16 @@ function replaceTags(text, replacements, timezone) {
     return newText;
 }
 
-async function readTemplate(templatePath, replacements, timezone) {
+async function readTemplate(templatePath, replacements) {
     try {
         const template = await fs.readFile(templatePath, 'utf-8');
-        return replaceTags(template, replacements, timezone);
+        return replaceTags(template, replacements);
     } catch(err) {
         throw new Error(`Template Read Error: ${err.message}`);
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -156,9 +153,9 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                     '-emaildomain-': email.split('@')[1],
                 };
 
-                const emailContent = await readTemplate(templatePath, replacements, timezone);
-                const textContent = await readTemplate(textTemplatePath, replacements, timezone);
-                const emailSubject = await readTemplate(subject, replacements, timezone);
+                const emailContent = await readTemplate(templatePath, replacements);
+                const textContent = await readTemplate(textTemplatePath, replacements);
+                const emailSubject = await readTemplate(subject, replacements);
 
                 let fromAddress;
                 if (hideFromEmail) {
@@ -182,8 +179,8 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                 }
 
                 if (sendPdfAttachment) {
-                    const dynamicPdfName = replaceTags(pdfAttachmentName, replacements, timezone);
-                    const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements, timezone);
+                    const dynamicPdfName = replaceTags(pdfAttachmentName, replacements);
+                    const attachmentHtmlContent = await readTemplate(attachmentHtmlPath, replacements);
                     const minifiedHtml = minify(attachmentHtmlContent, {
                         removeAttributeQuotes: true,
                         collapseWhitespace: true,
@@ -225,7 +222,7 @@ function validateEmail(email) {
     return true;
 }
 
-function getCurrentTime(timezone, format) {
+function getCurrentTime(format) {
     // Implement logic to get current time in the specified timezone and format
     return '';
 }
@@ -265,7 +262,6 @@ async function run() {
     const subject = 'subject.txt';
     const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
     const emailListPath = 'list.txt';
-    const timezone = 'America/New_York'; // Example timezone
     const attachmentHtmlPath = 'attachment.html';
     const delayBetweenEmails = 5000; // 5 seconds
     const sendPdfAttachment = true; // Set to false to disable PDF attachments
@@ -276,7 +272,7 @@ async function run() {
     const pdfQuality = 75; // PDF quality from 0-100
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, timezone, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality);
 }
 
 run();
