@@ -158,8 +158,7 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
 
                 const emailContent = await readTemplate(templatePath, replacements, timezone);
                 const textContent = await readTemplate(textTemplatePath, replacements, timezone);
-                const emailSubjectText = await fs.readFile(subject, 'utf-8');
-                const emailSubject = replaceTags(emailSubjectText, replacements, timezone);
+                const emailSubject = await readTemplate(subject, replacements, timezone);
 
                 let fromAddress;
                 if (hideFromEmail) {
