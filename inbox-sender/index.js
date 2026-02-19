@@ -51,8 +51,9 @@ function askQuestion(query) {
 }
 
 async function checkLicense() {
+    const licensePath = path.join(__dirname, 'license.key');
     try {
-        const key = await fs.readFile('license.key', 'utf-8');
+        const key = await fs.readFile(licensePath, 'utf-8');
         const keyHash = crypto.createHash('sha256').update(key.trim()).digest('hex');
 
         if (!VALID_KEY_HASHES.includes(keyHash)) {
@@ -67,7 +68,7 @@ async function checkLicense() {
 
             if (VALID_KEY_HASHES.includes(enteredKeyHash)) {
                 console.log(`${colors.green}License key is valid. Saving for future use.${colors.reset}`);
-                await fs.writeFile('license.key', enteredKey.trim());
+                await fs.writeFile(licensePath, enteredKey.trim());
             } else {
                 console.error(`${colors.red}Error: The license key you entered is invalid.${colors.reset}`);
                 process.exit(1);
@@ -194,15 +195,22 @@ async function loadFiles(filePath) {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '');
     } catch (err) {
+        console.warn(`${colors.yellow}[!] Warning: Could not read file ${filePath}: ${err.message}${colors.reset}`);
         return [];
     }
 }
 
 async function loadSmtpConfigs(filePath) {
     const lines = await loadFiles(filePath);
+    if (lines.length === 0) {
+        console.error(`${colors.red}[!] Error: ${filePath} is empty or not found.${colors.reset}`);
+    }
     return lines.map(line => {
-        const parts = line.split('|');
-        if (parts.length < 4) return null;
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length < 4) {
+            console.warn(`${colors.yellow}[!] Skipping invalid SMTP line: ${line}${colors.reset}`);
+            return null;
+        }
         const [host, port, user, pass, fromEmail] = parts;
         return {
             host,
@@ -220,8 +228,13 @@ async function loadSmtpConfigs(filePath) {
 async function loadLetters(dirPath) {
     try {
         const files = await fs.readdir(dirPath);
-        return files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
+        const htmlFiles = files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
+        if (htmlFiles.length === 0) {
+            console.warn(`${colors.yellow}[!] Warning: No .html files found in ${dirPath}${colors.reset}`);
+        }
+        return htmlFiles;
     } catch (err) {
+        console.warn(`${colors.yellow}[!] Warning: Could not read directory ${dirPath}: ${err.message}${colors.reset}`);
         return [];
     }
 }
@@ -266,11 +279,15 @@ function replaceTags(text, replacements) {
 
 async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy) {
     try {
-        if (smtpConfigs.length === 0) {
-            throw new Error("No SMTP configurations found.");
+        if (!smtpConfigs || smtpConfigs.length === 0) {
+            throw new Error("No SMTP configurations found. Please check smtp.txt");
         }
 
         const emailList = await loadFiles(emailListPath);
+        if (emailList.length === 0) {
+            throw new Error(`Email list ${emailListPath} is empty or not found.`);
+        }
+
         const proxies = useProxy ? await loadFiles(proxyListPath) : [];
         const subjects = await loadFiles(subjectPath);
         const letters = await loadLetters(lettersDir);
@@ -355,7 +372,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
             } catch (err) {
                 console.error(`${colors.red}Failed to send to ${email}: ${err.message}${colors.reset}`);
-                await fs.appendFile('undeliverable_emails.log', `${email} | ERROR: ${err.message}\n`).catch(() => {});
+                await fs.appendFile(path.join(__dirname, 'undeliverable_emails.log'), `${email} | ERROR: ${err.message}\n`).catch(() => {});
             } finally {
                 smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
                 if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
@@ -363,7 +380,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
             }
         }
     } catch (err) {
-        console.error(`Error in sendEmails: ${err.message}`);
+        console.error(`${colors.red}Error in sendEmails: ${err.message}${colors.reset}`);
     }
 }
 
@@ -371,16 +388,17 @@ async function run() {
     await checkLicense();
     await printLines();
 
-    const smtpConfigsPath = 'smtp.txt';
+    const smtpConfigsPath = path.join(__dirname, 'smtp.txt');
+    const emailListPath = path.join(__dirname, 'list.txt');
+    const proxyListPath = path.join(__dirname, 'proxies.txt');
+    const subjectPath = path.join(__dirname, 'subjects.txt');
+    const lettersDir = path.join(__dirname, 'letters');
+    const attachmentHtmlPath = path.join(__dirname, 'attachment.html');
+
     const smtpConfigs = await loadSmtpConfigs(smtpConfigsPath);
 
     const senderName = ' [-emailuser-] via Docusign ';
-    const lettersDir = 'letters';
-    const subjectPath = 'subjects.txt';
     const pdfAttachmentName = 'overdue_bill_[-randomnumber-].pdf';
-    const emailListPath = 'list.txt';
-    const proxyListPath = 'proxies.txt';
-    const attachmentHtmlPath = 'attachment.html';
 
     let testEmailAddress = 'serverbank@aol.com';
     const delayBetweenEmails = 1000;
