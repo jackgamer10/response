@@ -198,6 +198,25 @@ async function loadFiles(filePath) {
     }
 }
 
+async function loadSmtpConfigs(filePath) {
+    const lines = await loadFiles(filePath);
+    return lines.map(line => {
+        const parts = line.split('|');
+        if (parts.length < 4) return null;
+        const [host, port, user, pass, fromEmail] = parts;
+        return {
+            host,
+            port: parseInt(port) || 587,
+            secure: false,
+            auth: {
+                user,
+                pass
+            },
+            fromEmail: fromEmail || user
+        };
+    }).filter(cfg => cfg !== null);
+}
+
 async function loadLetters(dirPath) {
     try {
         const files = await fs.readdir(dirPath);
@@ -247,6 +266,10 @@ function replaceTags(text, replacements) {
 
 async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy) {
     try {
+        if (smtpConfigs.length === 0) {
+            throw new Error("No SMTP configurations found.");
+        }
+
         const emailList = await loadFiles(emailListPath);
         const proxies = useProxy ? await loadFiles(proxyListPath) : [];
         const subjects = await loadFiles(subjectPath);
@@ -344,22 +367,12 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
     }
 }
 
-const smtpConfigs = [
-    {
-        host: 'mail.asahi-net.or.jp',
-        port: 587,
-        secure: false,
-        auth: {
-            user: 'iq4s-ymst',
-            pass: 'kotarou100',
-        },
-        fromEmail: 'dse_notice_message@docsign.net'
-    }
-];
-
 async function run() {
     await checkLicense();
     await printLines();
+
+    const smtpConfigsPath = 'smtp.txt';
+    const smtpConfigs = await loadSmtpConfigs(smtpConfigsPath);
 
     const senderName = ' [-emailuser-] via Docusign ';
     const lettersDir = 'letters';
