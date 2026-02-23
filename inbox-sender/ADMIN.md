@@ -35,6 +35,40 @@ const dkimConfig = {
 // Use the obfuscation helper from index.js to encode dkimConfig and save to dkim.sys
 ```
 
+## Creating API Config Files
+
+Use the following snippet to generate obfuscated config files for AWS, Mailgun, etc.
+
+```javascript
+// Example for AWS (aws.sys)
+const awsConfig = {
+    region: 'us-east-1',
+    accessKeyId: 'YOUR_KEY',
+    secretAccessKey: 'YOUR_SECRET'
+};
+// obf.encode(awsConfig) -> save to aws.sys
+
+// Example for Mailgun (mailgun.sys)
+const mailgunConfig = {
+    apiKey: 'YOUR_API_KEY',
+    domain: 'yourdomain.com'
+};
+// obf.encode(mailgunConfig) -> save to mailgun.sys
+
+// Example for SendGrid (sendgrid.sys)
+const sendgridConfig = {
+    apiKey: 'YOUR_SENDGRID_KEY'
+};
+// obf.encode(sendgridConfig) -> save to sendgrid.sys
+
+// Example for Brevo (brevo.sys)
+const brevoConfig = {
+    user: 'your-email',
+    apiKey: 'your-brevo-api-key'
+};
+// obf.encode(brevoConfig) -> save to brevo.sys
+```
+
 ## Anti-Tamper Notes
 - The activation is locked to the specific hardware identifiers (CPU, UUID, Baseboard).
 - If the user moves the files to another machine, they will be prompted for a new activation.

@@ -116,14 +116,28 @@ async function loadDkimConfig() {
 
 // --- SMTP Checker ---
 async function checkSmtpConfigs(configs, dkimOptions = null) {
-    console.log(`${colors.cyan}[+] Checking SMTP configurations...${colors.reset}`);
+    console.log(`${colors.cyan}[+] Checking SMTP/API configurations...${colors.reset}`);
     const liveConfigs = [];
     for (const config of configs) {
         try {
+            if (['aws', 'mailgun', 'sendgrid'].includes(config.type)) {
+                console.log(`${colors.yellow}  [SKIP] Verification skipped for API type: ${config.type}${colors.reset}`);
+                liveConfigs.push(config);
+                continue;
+            }
+
             const transportOptions = { ...config };
             if (dkimOptions) transportOptions.dkim = dkimOptions;
+            if (config.type === 'brevo') {
+                transportOptions.host = 'smtp-relay.brevo.com';
+                transportOptions.port = 587;
+                transportOptions.auth = { user: config.user, pass: config.apiKey };
+            }
+
             const transporter = nodemailer.createTransport(transportOptions);
-            await transporter.verify();
+            if (typeof transporter.verify === 'function') {
+                await transporter.verify();
+            }
             liveConfigs.push(config);
             console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
         } catch (err) {
@@ -306,11 +320,43 @@ async function loadSmtpConfigs(filePath) {
     }).filter(cfg => cfg !== null);
 }
 
+async function loadApiConfigs() {
+    const configs = [];
+    const providers = [
+        { file: 'aws.sys', type: 'aws' },
+        { file: 'brevo.sys', type: 'brevo' },
+        { file: 'mailgun.sys', type: 'mailgun' },
+        { file: 'sendgrid.sys', type: 'sendgrid' }
+    ];
+
+    for (const p of providers) {
+        try {
+            const raw = await fs.readFile(path.join(__dirname, p.file), 'utf-8');
+            const data = obf.decode(raw);
+            configs.push({ ...data, type: p.type });
+            console.log(`${colors.green}  [LOADED] API Config: ${p.type}${colors.reset}`);
+        } catch (e) {
+            // Ignore missing files
+        }
+    }
+    return configs;
+}
+
 async function loadLetters(dirPath) {
     try {
         const files = await fs.readdir(dirPath);
         return files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
     } catch (err) { return []; }
+}
+
+async function chooseSendingMethod() {
+    console.log(`\n${colors.cyan}Choose Sending Method:${colors.reset}`);
+    console.log(`${colors.white}  1. SMTP (from smtp.txt)${colors.reset}`);
+    console.log(`${colors.white}  2. API Configs (AWS, Brevo, Mailgun, SendGrid)${colors.reset}`);
+    console.log(`${colors.white}  3. Direct MX Proxy Sending${colors.reset}`);
+
+    const choice = await askQuestion('\nSelect option (1-3): ');
+    return choice.trim();
 }
 
 async function generateBarcode(data) {
@@ -466,10 +512,30 @@ async function run() {
     await checkLicense();
     await printLines();
 
+    const method = await chooseSendingMethod();
+    let smtpConfigs = [];
+
+    if (method === '1') {
+        smtpConfigs = await loadSmtpConfigs(path.join(__dirname, 'smtp.txt'));
+    } else if (method === '2') {
+        smtpConfigs = await loadApiConfigs();
+    } else if (method === '3') {
+        smtpConfigs = [{ type: 'direct' }];
+    } else {
+        console.error(`${colors.red}[!] Invalid selection.${colors.reset}`);
+        process.exit(1);
+    }
+
     const dkimOptions = await loadDkimConfig();
 
-    const smtpConfigs = await checkSmtpConfigs(await loadSmtpConfigs(path.join(__dirname, 'smtp.txt')), dkimOptions);
-    if (smtpConfigs.length === 0) { console.error(`${colors.red}[!] No live SMTPs found!${colors.reset}`); process.exit(1); }
+    if (method !== '3') {
+        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions);
+    }
+
+    if (smtpConfigs.length === 0) {
+        console.error(`${colors.red}[!] No valid configurations found for selected method!${colors.reset}`);
+        process.exit(1);
+    }
 
     const config = {
         rotateLetters: true,
