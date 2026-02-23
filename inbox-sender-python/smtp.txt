@@ -1,1 +1,1 @@
-mail.example.com|587|user|pass
+host|port|user|pass|from@example.com

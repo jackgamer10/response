@@ -1,1 +1,1 @@
-mail.asahi-net.or.jp|587|iq4s-ymst|kotarou100|dse_notice_message@docsign.net
+host|port|user|pass|from@example.com

@@ -42,6 +42,7 @@ def main():
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  4. Create Mailgun Config (mailgun.sys)           {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  5. Create SendGrid Config (sendgrid.sys)         {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  6. Create DKIM Config (dkim.sys)                 {Colors.MAGENTA}│{Colors.RESET}")
+        print(f"{Colors.MAGENTA}│{Colors.WHITE}  7. Create Direct MX Config (direct_mx.sys)       {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  0. Exit                                          {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}└───────────────────────────────────────────────────┘{Colors.RESET}")
 
@@ -97,6 +98,16 @@ def main():
                 f.write(encode_obf(dkim))
             print(f"\n{Colors.GREEN}[+] Created dkim.sys{Colors.RESET}")
             print(f"{Colors.YELLOW}[!] Remember to place dkim_key.pem in the same folder.{Colors.RESET}\n")
+
+        elif choice == '7':
+            direct_mx = {
+                'retries': int(ask('Max Retries (default 3): ') or 3),
+                'timeout': int(ask('Timeout in ms (default 10000): ') or 10000),
+                'verifyDns': ask('Verify DNS/MX before send? (y/n): ').lower() == 'y'
+            }
+            with open('direct_mx.sys', 'w') as f:
+                f.write(encode_obf(direct_mx))
+            print(f"\n{Colors.GREEN}[+] Created direct_mx.sys{Colors.RESET}\n")
 
         elif choice == '0':
             sys.exit(0)

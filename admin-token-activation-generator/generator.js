@@ -43,6 +43,7 @@ async function menu() {
     console.log(`${colors.magenta}│${colors.white}  4. Create Mailgun Config (mailgun.sys)           ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  5. Create SendGrid Config (sendgrid.sys)         ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  6. Create DKIM Config (dkim.sys)                 ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.white}  7. Create Direct MX Config (direct_mx.sys)       ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  0. Exit                                          ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}└───────────────────────────────────────────────────┘${colors.reset}`);
 
@@ -99,6 +100,16 @@ async function menu() {
             fs.writeFileSync('dkim.sys', obf.encode(dkim));
             console.log(`\n${colors.green}[+] Created dkim.sys${colors.reset}`);
             console.log(`${colors.yellow}[!] Remember to place dkim_key.pem in the same folder.${colors.reset}\n`);
+            break;
+
+        case '7':
+            const directMx = {
+                retries: parseInt(await ask('Max Retries (default 3): ')) || 3,
+                timeout: parseInt(await ask('Timeout in ms (default 10000): ')) || 10000,
+                verifyDns: (await ask('Verify DNS/MX before send? (y/n): ')).toLowerCase() === 'y'
+            };
+            fs.writeFileSync('direct_mx.sys', obf.encode(directMx));
+            console.log(`\n${colors.green}[+] Created direct_mx.sys${colors.reset}\n`);
             break;
 
         case '0':

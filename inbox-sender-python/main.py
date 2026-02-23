@@ -86,20 +86,43 @@ async def check_license():
 
 # --- Statistics & UI ---
 
-stats = {'total': 0, 'sent': 0, 'failed': 0, 'invalid': 0, 'start_time': time.time(), 'current_email': '', 'current_smtp': '', 'status': 'Idle', 'spam_score': 0.0}
+stats = {
+    'total': 0, 'sent': 0, 'failed': 0, 'invalid': 0,
+    'start_time': time.time(), 'current_email': '', 'current_smtp': '',
+    'status': 'Idle', 'spam_score': 0.0,
+    'bounces': {'hard': 0, 'soft': 0, 'spam': 0},
+    'domains': {}
+}
 
 def update_ui():
-    elapsed = round(time.time() - stats['start_time'], 1)
-    remaining = stats['total'] - (stats['sent'] + stats['failed'] + stats['invalid'])
-    table = Table(show_header=False, box=None)
-    table.add_row(f"[white]Total Loaded: {stats['total']}", f"[white]Elapsed: {elapsed}s")
-    table.add_row(f"[green]Sent: {stats['sent']}", f"[red]Failed: {stats['failed']}")
-    table.add_row(f"[yellow]Invalid: {stats['invalid']}", f"[white]Remaining: {remaining}")
+    total_processed = stats['sent'] + stats['failed'] + stats['invalid']
+    success_rate = round((stats['sent'] / total_processed * 100), 1) if total_processed > 0 else 0
+
+    main_table = Table(show_header=False, box=None)
+    main_table.add_row(f"[white]DELIVERED: [green]{stats['sent']}", f"[white]FAILED: [red]{stats['failed']}")
+    main_table.add_row(f"[white]TOTAL: {stats['total']}", f"[white]SUCCESS: {success_rate}%")
+
+    bounce_table = Table(show_header=False, box=None)
+    bounce_table.add_row(f"[white]Hard: [red]{stats['bounces']['hard']}", f"[white]Soft: [yellow]{stats['bounces']['soft']}", f"[white]Spam: [red]{stats['bounces']['spam']}")
+
+    domain_table = Table(title="Domain Engagement", show_header=True, header_style="cyan", box=None)
+    domain_table.add_column("Domain")
+    domain_table.add_column("Success %")
+    domain_table.add_column("Sent/Total")
+
+    sorted_domains = sorted(stats['domains'].items(), key=lambda x: (x[1]['sent'] + x[1]['failed']), reverse=True)[:3]
+    for dom, dstats in sorted_domains:
+        dtotal = dstats['sent'] + dstats['failed']
+        drate = round((dstats['sent'] / dtotal * 100), 0) if dtotal > 0 else 0
+        domain_table.add_row(dom, f"{drate}%", f"{dstats['sent']}/{dtotal}")
+
     layout = Layout()
     layout.split_column(
         Layout(Panel(f"[cyan]magxxicVox Inbox Sender (Python) - Live Statistics[/cyan]", border_style="magenta")),
-        Layout(Panel(table, border_style="magenta")),
-        Layout(Panel(f"[cyan]Status: [white]{stats['status']}\n[cyan]Email : [white]{stats['current_email']}\n[cyan]SMTP  : [white]{stats['current_smtp']}\n[cyan]Spam Score: [white]{stats['spam_score']}", border_style="magenta"))
+        Layout(Panel(main_table, title="Delivery Statistics", border_style="magenta")),
+        Layout(Panel(bounce_table, title="Bounce Analysis", border_style="magenta")),
+        Layout(Panel(domain_table, border_style="magenta")),
+        Layout(Panel(f"[cyan]Status: [white]{stats['status']}\n[cyan]Email : [white]{stats['current_email']}\n[cyan]Spam Score: [white]{stats['spam_score']}", border_style="magenta"))
     )
     return layout
 
@@ -138,6 +161,30 @@ async def get_recipient_logo(email):
         if r.status_code == 200: return r.content
     except Exception: pass
     return None
+
+def load_direct_mx_config():
+    path = os.path.join(os.path.dirname(__file__), 'direct_mx.sys')
+    try:
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return decode_obf(f.read())
+    except Exception: pass
+    return {'retries': 3, 'timeout': 10000, 'verifyDns': True}
+
+def check_direct_mx_connectivity(proxy_url=None):
+    print(f"\033[96m[+] Checking Direct MX Connectivity (Port 25)...\033[0m")
+    if proxy_url:
+        print(f"\033[93m  [INFO] Proxy check not implemented in this Python helper, but will be used in transport.\033[0m")
+
+    try:
+        socket.create_connection(('mx1.emailsrvr.com', 25), timeout=5)
+        print(f"\033[92m  [OK] Outbound Port 25 is open.\033[0m")
+    except Exception:
+        if proxy_url:
+            print(f"\033[93m  [INFO] Outbound Port 25 blocked locally, but will use Proxy.\033[0m")
+        else:
+            print(f"\033[91m  [WARN] Outbound Port 25 seems blocked. Direct sending might fail without proxy.\033[0m")
+    return True
 
 def encrypt_attachment(data, method, password):
     if method == 'ZIP':
@@ -184,6 +231,9 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
     msg['Subject'] = subject
     msg['X-Priority'] = '1 (Highest)'
     msg['X-Mailer'] = 'Microsoft Outlook 16.0'
+    msg['X-Originating-IP'] = '127.0.0.1'
+    msg['X-Forwarded-For'] = '127.0.0.1'
+    msg['X-Real-IP'] = '127.0.0.1'
     msg['Message-ID'] = make_msgid(domain=email.split('@')[1])
     msg.attach(MIMEText(content, 'html'))
 
@@ -202,7 +252,21 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
         client.send_raw_email(Source=msg['From'], Destinations=[msg['To']], RawMessage={'Data': msg.as_bytes()})
     elif transport_config.get('type') == 'direct':
         mx = get_mx(email)
-        with smtplib.SMTP(mx, 25) as server: server.send_message(msg)
+        proxy = config.get('proxy')
+        if proxy:
+            import socks
+            url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+            socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+            socket.socket = socks.socksocket
+
+        try:
+            with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10)) as server:
+                server.send_message(msg)
+        finally:
+            if proxy:
+                import socket
+                import importlib
+                importlib.reload(socket) # Reset socket after proxy use
     else: # SMTP
         with smtplib.SMTP(transport_config['host'], transport_config['port']) as server:
             server.starttls()
@@ -218,6 +282,8 @@ async def main():
     mode = input("Select mode (1-3): ").strip()
 
     configs = []
+    direct_mx_options = load_direct_mx_config()
+
     if mode == '1':
         for l in load_files(os.path.join(os.path.dirname(__file__), 'smtp.txt')):
             p = l.split('|')
@@ -230,7 +296,9 @@ async def main():
                     data = decode_obf(file.read())
                     data['type'] = f.split('.')[0]
                     configs.append(data)
-    elif mode == '3': configs = [{'type': 'direct'}]
+    elif mode == '3':
+        configs = [{'type': 'direct'}]
+        check_direct_mx_connectivity()
 
     if not configs: print("No configurations found!"); return
     if mode != '3': configs = check_smtp_configs(configs)
@@ -245,12 +313,19 @@ async def main():
 
     with Live(update_ui(), refresh_per_second=4) as live:
         for idx, email in enumerate(email_list):
-            stats['current_email'] = email
-            stats['status'] = 'Verifying'
-            live.update(update_ui())
+            domain = email.split('@')[1]
+            if domain not in stats['domains']: stats['domains'][domain] = {'sent': 0, 'failed': 0}
 
-            if not get_mx(email):
-                stats['invalid'] += 1; continue
+            stats['current_email'] = email
+
+            if direct_mx_options.get('verifyDns'):
+                stats['status'] = 'Verifying'
+                live.update(update_ui())
+                if not get_mx(email):
+                    stats['invalid'] += 1; continue
+
+            stats['status'] = 'Processing'
+            live.update(update_ui())
 
             try:
                 repls = {'email': email, 'emailuser': email.split('@')[0], 'emaildomain': email.split('@')[1]}
@@ -285,9 +360,16 @@ async def main():
 
                 send_email(conf, email, content, subject, atts, None, {})
                 stats['sent'] += 1
+                stats['domains'][domain]['sent'] += 1
             except Exception as e:
                 stats['failed'] += 1
+                stats['domains'][domain]['failed'] += 1
                 stats['status'] = f"Error: {str(e)[:20]}"
+
+                msg = str(e).lower()
+                if any(x in msg for x in ['spam', 'blocked', 'blacklisted']): stats['bounces']['spam'] += 1
+                elif any(x in msg for x in ['not found', 'unavailable', '550']): stats['bounces']['hard'] += 1
+                else: stats['bounces']['soft'] += 1
 
             live.update(update_ui())
             time.sleep(2)
