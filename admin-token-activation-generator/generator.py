@@ -43,6 +43,7 @@ def main():
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  5. Create SendGrid Config (sendgrid.sys)         {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  6. Create DKIM Config (dkim.sys)                 {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  7. Create Direct MX Config (direct_mx.sys)       {Colors.MAGENTA}│{Colors.RESET}")
+        print(f"{Colors.MAGENTA}│{Colors.WHITE}  8. Create App Config (config.sys)                {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}│{Colors.WHITE}  0. Exit                                          {Colors.MAGENTA}│{Colors.RESET}")
         print(f"{Colors.MAGENTA}└───────────────────────────────────────────────────┘{Colors.RESET}")
 
@@ -100,15 +101,35 @@ def main():
             print(f"{Colors.YELLOW}[!] Remember to place dkim_key.pem in the same folder.{Colors.RESET}\n")
 
         elif choice == '7':
-            direct_mx = {
-                'retries': int(ask('Max Retries (default 3): ') or 3),
-                'timeout': int(ask('Timeout in ms (default 10000): ') or 10000),
+            dm_config = {
                 'heloDomain': ask('HELO/EHLO Domain (e.g. mail.example.com): '),
+                'timeout': int(ask('Timeout in ms (default 10000): ') or 10000)
+            }
+            dm_settings = {
+                'retries': int(ask('Max Retries (default 3): ') or 3),
                 'verifyDns': ask('Verify DNS/MX before send? (y/n): ').lower() == 'y'
             }
-            with open('direct_mx.sys', 'w') as f:
-                f.write(encode_obf(direct_mx))
-            print(f"\n{Colors.GREEN}[+] Created direct_mx.sys{Colors.RESET}\n")
+            with open('direct_mx_config.sys', 'w') as f:
+                f.write(encode_obf(dm_config))
+            with open('direct_mx_settings.sys', 'w') as f:
+                f.write(encode_obf(dm_settings))
+            print(f"\n{Colors.GREEN}[+] Created direct_mx_config.sys and direct_mx_settings.sys{Colors.RESET}\n")
+
+        elif choice == '8':
+            config = {
+                'rotateLetters': ask('Rotate Letters? (y/n): ').lower() == 'y',
+                'autoShortenLinks': ask('Auto Shorten Links? (y/n): ').lower() == 'y',
+                'sendImageAttachment': ask('Send Image Attachment? (y/n): ').lower() == 'y',
+                'delayBetweenEmails': int(ask('Delay between emails (ms): ') or 2000),
+                'pauseEvery': int(ask('Pause every X emails: ') or 50),
+                'pauseTime': int(ask('Pause duration (ms): ') or 30000),
+                'encryptionMethod': ask('Encryption Method (None/AES-256-CBC/ZIP): ') or 'ZIP',
+                'encryptionPassword': ask('Encryption Password: ') or 'secret',
+                'signAttachment': ask('Sign Attachment? (y/n): ').lower() == 'y'
+            }
+            with open('config.sys', 'w') as f:
+                f.write(encode_obf(config))
+            print(f"\n{Colors.GREEN}[+] Created config.sys{Colors.RESET}\n")
 
         elif choice == '0':
             sys.exit(0)

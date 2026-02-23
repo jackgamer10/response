@@ -380,10 +380,24 @@ async function loadApiConfigs() {
 
 async function loadDirectMxConfig() {
     try {
-        const raw = await fs.readFile(path.join(__dirname, 'direct_mx.sys'), 'utf-8');
+        const configRaw = await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8');
+        const settingsRaw = await fs.readFile(path.join(__dirname, 'direct_mx_settings.sys'), 'utf-8');
+        return { ...obf.decode(configRaw), ...obf.decode(settingsRaw) };
+    } catch (e) {
+        return { retries: 3, timeout: 10000, verifyDns: true, heloDomain: 'localhost' };
+    }
+}
+
+async function loadAppConfig() {
+    try {
+        const raw = await fs.readFile(path.join(__dirname, 'config.sys'), 'utf-8');
         return obf.decode(raw);
     } catch (e) {
-        return { retries: 3, timeout: 10000, verifyDns: true };
+        return {
+            rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
+            delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
+            encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true
+        };
     }
 }
 
@@ -640,6 +654,7 @@ async function run() {
     const method = await chooseSendingMethod();
     let smtpConfigs = [];
     let directMxOptions = await loadDirectMxConfig();
+    let appConfig = await loadAppConfig();
 
     if (method === '1') {
         smtpConfigs = await loadSmtpConfigs(path.join(__dirname, 'smtp.txt'));
@@ -667,15 +682,9 @@ async function run() {
     }
 
     const config = {
-        rotateLetters: true,
-        autoShortenLinks: false,
-        sendImageAttachment: true,
-        pauseEvery: 50, pauseTime: 30000, delayBetweenEmails: 2000,
-        encryptionMethod: 'ZIP', // Options: 'None', 'AES-256-CBC', 'ZIP'
-        encryptionPassword: 'military_grade_password',
+        ...appConfig,
         useDKIM: dkimOptions !== null,
         dkimOptions: dkimOptions,
-        signAttachment: true,
         directMxOptions: directMxOptions
     };
 

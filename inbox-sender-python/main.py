@@ -165,13 +165,39 @@ async def get_recipient_logo(email):
     return None
 
 def load_direct_mx_config():
-    path = os.path.join(os.path.dirname(__file__), 'direct_mx.sys')
+    cfg_path = os.path.join(os.path.dirname(__file__), 'direct_mx_config.sys')
+    set_path = os.path.join(os.path.dirname(__file__), 'direct_mx_settings.sys')
+    try:
+        res = {'retries': 3, 'timeout': 10000, 'verifyDns': True, 'heloDomain': 'localhost'}
+        if os.path.exists(cfg_path):
+            with open(cfg_path, 'r') as f: res.update(decode_obf(f.read()))
+        if os.path.exists(set_path):
+            with open(set_path, 'r') as f: res.update(decode_obf(f.read()))
+        return res
+    except Exception: return {'retries': 3, 'timeout': 10000, 'verifyDns': True, 'heloDomain': 'localhost'}
+
+def load_app_config():
+    path = os.path.join(os.path.dirname(__file__), 'config.sys')
     try:
         if os.path.exists(path):
-            with open(path, 'r') as f:
-                return decode_obf(f.read())
+            with open(path, 'r') as f: return decode_obf(f.read())
     except Exception: pass
-    return {'retries': 3, 'timeout': 10000, 'verifyDns': True}
+    return {
+        'rotateLetters': True, 'autoShortenLinks': False, 'sendImageAttachment': True,
+        'delayBetweenEmails': 2000, 'pauseEvery': 50, 'pauseTime': 30000,
+        'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True
+    }
+
+def load_dkim_config():
+    dkim_path = os.path.join(os.path.dirname(__file__), 'dkim.sys')
+    key_path = os.path.join(os.path.dirname(__file__), 'dkim_key.pem')
+    try:
+        if os.path.exists(dkim_path) and os.path.exists(key_path):
+            with open(dkim_path, 'r') as f: config = decode_obf(f.read())
+            with open(key_path, 'r') as f: private_key = f.read()
+            return {**config, 'privateKey': private_key}
+    except Exception: pass
+    return None
 
 def check_direct_mx_connectivity(proxy_url=None):
     print(f"\033[96m[+] Checking Direct MX Connectivity (Port 25)...\033[0m")
@@ -274,10 +300,23 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
                 import importlib
                 importlib.reload(socket) # Reset socket after proxy use
     else: # SMTP
-        with smtplib.SMTP(transport_config['host'], transport_config['port']) as server:
-            server.starttls()
-            server.login(transport_config['user'], transport_config['pass'])
-            server.send_message(msg)
+        proxy = config.get('proxy')
+        if proxy:
+            import socks
+            url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+            socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+            socket.socket = socks.socksocket
+
+        try:
+            with smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10)) as server:
+                server.starttls()
+                server.login(transport_config['user'], transport_config['pass'])
+                server.send_message(msg)
+        finally:
+            if proxy:
+                import socket
+                import importlib
+                importlib.reload(socket)
 
 # --- Main Flow ---
 
@@ -289,6 +328,8 @@ async def main():
 
     configs = []
     direct_mx_options = load_direct_mx_config()
+    app_config = load_app_config()
+    dkim_options = load_dkim_config()
 
     if mode == '1':
         for l in load_files(os.path.join(os.path.dirname(__file__), 'smtp.txt')):
@@ -385,7 +426,7 @@ async def main():
                 if from_emails: conf['from_email'] = replace_tags(random.choice(from_emails), repls)
 
                 proxy = proxies[idx % len(proxies)] if proxies else None
-                send_email(conf, email, content, subject, atts, None, {'proxy': proxy})
+                send_email(conf, email, content, subject, atts, dkim_options, {**app_config, 'proxy': proxy})
                 stats['sent'] += 1
                 stats['domains'][domain]['sent'] += 1
             except Exception as e:
@@ -399,7 +440,7 @@ async def main():
                 else: stats['bounces']['soft'] += 1
 
             live.update(update_ui())
-            time.sleep(2)
+            time.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
 
 if __name__ == "__main__":
     import asyncio

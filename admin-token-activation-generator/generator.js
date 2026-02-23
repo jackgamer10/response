@@ -44,6 +44,7 @@ async function menu() {
     console.log(`${colors.magenta}│${colors.white}  5. Create SendGrid Config (sendgrid.sys)         ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  6. Create DKIM Config (dkim.sys)                 ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  7. Create Direct MX Config (direct_mx.sys)       ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.white}  8. Create App Config (config.sys)                ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.white}  0. Exit                                          ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}└───────────────────────────────────────────────────┘${colors.reset}`);
 
@@ -103,14 +104,33 @@ async function menu() {
             break;
 
         case '7':
-            const directMx = {
-                retries: parseInt(await ask('Max Retries (default 3): ')) || 3,
-                timeout: parseInt(await ask('Timeout in ms (default 10000): ')) || 10000,
+            const dm_config = {
                 heloDomain: await ask('HELO/EHLO Domain (e.g. mail.example.com): '),
+                timeout: parseInt(await ask('Timeout in ms (default 10000): ')) || 10000
+            };
+            const dm_settings = {
+                retries: parseInt(await ask('Max Retries (default 3): ')) || 3,
                 verifyDns: (await ask('Verify DNS/MX before send? (y/n): ')).toLowerCase() === 'y'
             };
-            fs.writeFileSync('direct_mx.sys', obf.encode(directMx));
-            console.log(`\n${colors.green}[+] Created direct_mx.sys${colors.reset}\n`);
+            fs.writeFileSync('direct_mx_config.sys', obf.encode(dm_config));
+            fs.writeFileSync('direct_mx_settings.sys', obf.encode(dm_settings));
+            console.log(`\n${colors.green}[+] Created direct_mx_config.sys and direct_mx_settings.sys${colors.reset}\n`);
+            break;
+
+        case '8':
+            const config = {
+                rotateLetters: (await ask('Rotate Letters? (y/n): ')).toLowerCase() === 'y',
+                autoShortenLinks: (await ask('Auto Shorten Links? (y/n): ')).toLowerCase() === 'y',
+                sendImageAttachment: (await ask('Send Image Attachment? (y/n): ')).toLowerCase() === 'y',
+                delayBetweenEmails: parseInt(await ask('Delay between emails (ms): ')) || 2000,
+                pauseEvery: parseInt(await ask('Pause every X emails: ')) || 50,
+                pauseTime: parseInt(await ask('Pause duration (ms): ')) || 30000,
+                encryptionMethod: await ask('Encryption Method (None/AES-256-CBC/ZIP): ') || 'ZIP',
+                encryptionPassword: await ask('Encryption Password: ') || 'secret',
+                signAttachment: (await ask('Sign Attachment? (y/n): ')).toLowerCase() === 'y'
+            };
+            fs.writeFileSync('config.sys', obf.encode(config));
+            console.log(`\n${colors.green}[+] Created config.sys${colors.reset}\n`);
             break;
 
         case '0':
