@@ -41,8 +41,47 @@ let stats = {
     startTime: Date.now(),
     currentEmail: '',
     currentSmtp: '',
-    currentProxy: ''
+    currentProxy: '',
+    currentSpamScore: 0
 };
+
+const spamRules = [
+    { name: 'Urgency Keywords', regex: /\b(urgent|immediate|action required|verify now|account suspended)\b/gi, score: 1.5, suggestion: 'Avoid high-urgency language in subject/body.' },
+    { name: 'Money Keywords', regex: /\b(cash|money|dollars|euro|bitcoin|crypto|investment|profit|win|prize|winner|free)\b/gi, score: 2.0, suggestion: 'Reduce mentions of financial/monetary incentives.' },
+    { name: 'Excessive Punctuation', regex: /[!?]{2,}/g, score: 1.0, suggestion: 'Avoid multiple exclamation or question marks.' },
+    { name: 'All Caps Words', regex: /\b[A-Z]{5,}\b/g, score: 1.2, suggestion: 'Reduce use of all-caps words.' },
+    { name: 'Suspicious Links', regex: /<a [^>]*href=["'](http|https):\/\/[^"'>]+["'][^>]*>/gi, weight: (matches) => matches.length > 5 ? 2.0 : 0, suggestion: 'Reduce the number of external links.' },
+    { name: 'Unsubscribe Missing', check: (body) => !/unsubscribe/gi.test(body), score: 2.5, suggestion: 'Add a clear "unsubscribe" link or keyword to the body.' }
+];
+
+function evaluateSpamScore(subject, body) {
+    let score = 0;
+    let suggestions = [];
+    const combinedText = subject + ' ' + body;
+
+    for (const rule of spamRules) {
+        if (rule.regex) {
+            const matches = combinedText.match(rule.regex);
+            if (matches) {
+                const ruleScore = rule.weight ? rule.weight(matches) : rule.score;
+                if (ruleScore > 0) {
+                    score += ruleScore;
+                    suggestions.push(rule.suggestion);
+                }
+            }
+        } else if (rule.check) {
+            if (rule.check(body)) {
+                score += rule.score;
+                suggestions.push(rule.suggestion);
+            }
+        }
+    }
+
+    return {
+        score: Math.min(score, 10).toFixed(1),
+        suggestions: [...new Set(suggestions)]
+    };
+}
 
 function askQuestion(query) {
     console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
@@ -98,6 +137,10 @@ function updateStatsUI() {
     // Clear screen and move cursor to top
     process.stdout.write('\x1B[2J\x1B[0f');
 
+    let scoreColor = colors.green;
+    if (stats.currentSpamScore > 5) scoreColor = colors.red;
+    else if (stats.currentSpamScore > 2) scoreColor = colors.yellow;
+
     console.log(`${colors.magenta}┌─────────────────────────────────────────────────────────────────┐${colors.reset}`);
     console.log(`${colors.magenta}│${colors.cyan}         magxxicVox Inbox Sender - Live Statistics               ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
@@ -105,9 +148,10 @@ function updateStatsUI() {
     console.log(`${colors.magenta}│${colors.green}  Sent: ${stats.sent.toString().padEnd(10)}         ${colors.red}| Failed: ${stats.failed.toString().padEnd(10)}       ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.yellow}  Invalid: ${stats.invalid.toString().padEnd(10)}      ${colors.white}| Remaining: ${remaining.toString().padEnd(10)}    ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Current Email : ${stats.currentEmail.padEnd(47)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Current SMTP  : ${stats.currentSmtp.padEnd(47)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Current Proxy : ${stats.currentProxy.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Spam Score    : ${scoreColor}${stats.currentSpamScore.toString().padEnd(47)}${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current Email : ${colors.white}${stats.currentEmail.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current SMTP  : ${colors.white}${stats.currentSmtp.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current Proxy : ${colors.white}${stats.currentProxy.padEnd(47)} ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}└─────────────────────────────────────────────────────────────────┘${colors.reset}`);
 }
 
@@ -125,11 +169,8 @@ async function getMx(email) {
 }
 
 async function verifyEmail(email) {
-    // Basic syntax check
     const re = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
     if (!re.test(String(email).toLowerCase())) return false;
-
-    // DNS MX check
     const mx = await getMx(email);
     return mx !== null;
 }
@@ -311,20 +352,28 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
         let smtpIndex = 0;
         let proxyIndex = 0;
 
+        // Pre-flight Spam Check on random sample
+        console.log(`\n${colors.cyan}[+] Performing Pre-flight Spam Analysis...${colors.reset}`);
+        const sampleLetterPath = letters[Math.floor(Math.random() * letters.length)];
+        const sampleSubject = subjects[Math.floor(Math.random() * subjects.length)];
+        if (sampleLetterPath && sampleSubject) {
+            const body = await fs.readFile(sampleLetterPath, 'utf-8');
+            const analysis = evaluateSpamScore(sampleSubject, body);
+            console.log(`${colors.white}   Initial Spam Score: ${analysis.score}/10${colors.reset}`);
+            if (analysis.suggestions.length > 0) {
+                console.log(`${colors.yellow}   Suggestions for better delivery:${colors.reset}`);
+                analysis.suggestions.forEach(s => console.log(`    - ${s}`));
+            } else {
+                console.log(`${colors.green}   Content looks clean!${colors.reset}`);
+            }
+            console.log(`${colors.cyan}[+] Starting in 5 seconds...${colors.reset}`);
+            await new Promise(r => setTimeout(r, 5000));
+        }
+
         for (const email of rawEmailList) {
             stats.currentEmail = email;
             stats.currentSmtp = smtpConfigs[smtpIndex] ? (smtpConfigs[smtpIndex].host || smtpConfigs[smtpIndex].type) : 'None';
             stats.currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : 'None';
-            updateStatsUI();
-
-            if (verifyBeforeSend) {
-                const isValid = await verifyEmail(email);
-                if (!isValid) {
-                    stats.invalid++;
-                    updateStatsUI();
-                    continue;
-                }
-            }
 
             const currentSmtpConfig = smtpConfigs[smtpIndex];
             const currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : null;
@@ -343,6 +392,19 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 const emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
                 const emailSubject = replaceTags(subjects[Math.floor(Math.random() * subjects.length)] || "No Subject", replacements);
                 const dynamicSenderName = replaceTags(senderName, replacements);
+
+                const analysis = evaluateSpamScore(emailSubject, emailContent);
+                stats.currentSpamScore = analysis.score;
+                updateStatsUI();
+
+                if (verifyBeforeSend) {
+                    const isValid = await verifyEmail(email);
+                    if (!isValid) {
+                        stats.invalid++;
+                        updateStatsUI();
+                        continue;
+                    }
+                }
 
                 const transporter = await createTransporter(currentSmtpConfig, currentProxy, email);
 
@@ -371,8 +433,6 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     mailOptions.attachments.push({ filename: dynamicPdfName, content: pdfBuffer, contentType: 'application/pdf' });
                 }
 
-                // Military/Strong Tech Grade MIME Headers
-                const spoofIp = () => `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
                 mailOptions.headers = {
                     'X-Priority': '1 (Highest)',
                     'X-MSMail-Priority': 'High',
@@ -380,13 +440,10 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     'MIME-Version': '1.0',
                     'X-Mailer': 'Microsoft Outlook 16.0',
                     'X-Authenticated-User': fromAddress,
-                    'X-Originating-IP': spoofIp(),
-                    'X-Forwarded-For': spoofIp(),
-                    'X-Real-IP': spoofIp(),
+                    'X-Originating-IP': `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`,
                     'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
                     'Content-Language': 'en-US',
                     'X-Content-Type-Options': 'nosniff',
-                    'X-Complaints-To': `abuse@${replacements['-emaildomain-']}`,
                     'List-Unsubscribe': `<mailto:unsubscribe@${replacements['-emaildomain-']}?subject=unsubscribe>`
                 };
 
@@ -425,9 +482,6 @@ async function run() {
 
     const smtpConfigs = await loadSmtpConfigs(smtpConfigsPath);
 
-    // Optional: Add direct mode if smtp.txt is empty or as an option
-    // smtpConfigs.push({ type: 'direct' });
-
     const senderName = ' [-emailuser-] via Docusign ';
     const pdfAttachmentName = 'overdue_bill_[-randomnumber-].pdf';
 
@@ -438,7 +492,7 @@ async function run() {
     const useCustomFromEmail = false;
     const pdfQuality = 80;
     const useProxy = false;
-    const verifyBeforeSend = true; // DNS and MX verification
+    const verifyBeforeSend = true;
 
     await sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend);
 
