@@ -20,7 +20,7 @@ const colors = {
 const SECRET_SALT = 'magxxicVox_Super_Secure_Salt_2024';
 
 const obf = {
-    encode: (data) => Buffer.from(JSON.stringify(data)).toString('base64').split('').reverse().join('')
+    encode: (data) => JSON.stringify(data, null, 4)
 };
 
 const rl = readline.createInterface({

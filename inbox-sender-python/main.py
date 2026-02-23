@@ -52,14 +52,10 @@ def generate_token(hwid):
     return hashlib.sha256((hwid + SECRET_SALT).encode()).hexdigest().upper()
 
 def encode_obf(data):
-    json_data = json.dumps(data, separators=(',', ':'))
-    b64_data = base64.b64encode(json_data.encode()).decode()
-    return b64_data[::-1]
+    return json.dumps(data, indent=4)
 
 def decode_obf(data):
-    b64_data = data[::-1]
-    json_data = base64.b64decode(b64_data).decode()
-    return json.loads(json_data)
+    return json.loads(data)
 
 async def check_license():
     activation_path = os.path.join(os.path.dirname(__file__), 'activation.sys')

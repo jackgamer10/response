@@ -55,10 +55,10 @@ function generateToken(hwid) {
     return crypto.createHash('sha256').update(hwid + SECRET_SALT).digest('hex').toUpperCase();
 }
 
-// Obfuscation helper
+// Configuration helper
 const obf = {
-    encode: (data) => Buffer.from(JSON.stringify(data)).toString('base64').split('').reverse().join(''),
-    decode: (data) => JSON.parse(Buffer.from(data.split('').reverse().join(''), 'base64').toString('utf-8'))
+    encode: (data) => JSON.stringify(data, null, 4),
+    decode: (data) => JSON.parse(data)
 };
 
 async function checkLicense() {
