@@ -1,0 +1,2 @@
+sender1@example.com
+sender2@example.com
