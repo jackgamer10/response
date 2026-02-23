@@ -49,7 +49,7 @@ def generate_token(hwid):
     return hashlib.sha256((hwid + SECRET_SALT).encode()).hexdigest().upper()
 
 def encode_obf(data):
-    json_data = json.dumps(data)
+    json_data = json.dumps(data, separators=(',', ':'))
     b64_data = base64.b64encode(json_data.encode()).decode()
     return b64_data[::-1]
 
