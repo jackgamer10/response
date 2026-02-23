@@ -190,7 +190,9 @@ let stats = {
         spam: 0
     },
     domains: {}, // { domain: { sent: 0, failed: 0 } }
-    dnsVerified: false
+    dnsVerified: false,
+    proxies: { live: 0, total: 0 },
+    port25: 'Unknown'
 };
 
 const spamRules = [
@@ -235,7 +237,7 @@ function updateStatsUI() {
     const elapsed = ((Date.now() - stats.startTime) / 1000).toFixed(1);
     const totalProcessed = stats.sent + stats.failed + stats.invalid;
     const remaining = stats.total - totalProcessed;
-    const successRate = totalProcessed > 0 ? ((stats.sent / (stats.sent + stats.failed)) * 100).toFixed(1) : 0;
+    const successRate = (stats.sent + stats.failed) > 0 ? ((stats.sent / (stats.sent + stats.failed)) * 100).toFixed(1) : 0;
 
     process.stdout.write('\x1B[2J\x1B[0f');
     let scoreColor = colors.green;
@@ -246,32 +248,34 @@ function updateStatsUI() {
     if (successRate < 50) rateColor = colors.red;
     else if (successRate < 80) rateColor = colors.yellow;
 
-    console.log(`${colors.cyan}╔═════════════════════════════════════════════════════════════════╗${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.bright}${colors.white}         magxxicVox Inbox Sender - OPERATION DASHBOARD           ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}╠══════════════╦══════════════════════╦═══════════════════════════╣${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  DELIVERED   ${colors.cyan}║ ${colors.green}${stats.sent.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}STATUS: ${stats.status.padEnd(12)} ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  FAILED      ${colors.cyan}║ ${colors.red}${stats.failed.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}TIME  : ${elapsed.toString().padEnd(10)}s ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  SUCCESS RATE${colors.cyan}║ ${rateColor}${successRate.toString().padEnd(19)}%${colors.cyan} ║ ${colors.white}TOTAL : ${stats.total.toString().padEnd(12)} ${colors.cyan}║${colors.reset}`);
-    const dnsStatus = stats.dnsVerified ? `${colors.green}ENABLED` : `${colors.red}DISABLED`;
-    console.log(`${colors.cyan}║${colors.white}  DNS VERIFY  ${colors.cyan}║ ${dnsStatus.padEnd(20)}${colors.cyan} ║ ${colors.white}PROXY : ${stats.currentProxy.padEnd(12).substring(0, 12)} ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}╠══════════════╩══════════════════════╩═══════════════════════════╣${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.magenta}  BOUNCE ANALYSIS                                                ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  HARD: ${colors.red}${stats.bounces.hard.toString().padEnd(10)}${colors.white} SOFT: ${colors.yellow}${stats.bounces.soft.toString().padEnd(10)}${colors.white} SPAM: ${colors.red}${stats.bounces.spam.toString().padEnd(10)}     ${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}╠═════════════════════════════════════════════════════════════════╣${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.magenta}  DOMAIN ENGAGEMENT                                              ${colors.cyan}║${colors.reset}`);
+    const p25Color = stats.port25 === 'Open' ? colors.green : (stats.port25 === 'Blocked' ? colors.red : colors.yellow);
+
+    console.log(`${colors.magenta}╔══════════════════════════════════════════════════════════════════════╗${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.bright}${colors.cyan}             magxxicVox Inbox Sender - OPERATION LIVE DASHBOARD       ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════╦══════════════════════╦════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  DELIVERED: ${colors.green}${stats.sent.toString().padEnd(8)}${colors.magenta}║${colors.white}  FAILED: ${colors.red}${stats.failed.toString().padEnd(10)}${colors.magenta}║${colors.white}  SUCCESS: ${rateColor}${successRate.toString().padEnd(10)}% ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════╩══════════════════════╩════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.yellow}  DIAGNOSTIC STATUS                                                   ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  Port 25: ${p25Color}${stats.port25.padEnd(10)}${colors.white} Proxies: ${colors.green}${stats.proxies.live}${colors.white}/${stats.proxies.total} Live${colors.white}${' '.repeat(26 - stats.proxies.live.toString().length - stats.proxies.total.toString().length)}${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.cyan}  BOUNCE ANALYSIS                                                     ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  HARD: ${colors.red}${stats.bounces.hard.toString().padEnd(10)}${colors.white} SOFT: ${colors.yellow}${stats.bounces.soft.toString().padEnd(10)}${colors.white} SPAM: ${colors.red}${stats.bounces.spam.toString().padEnd(15)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.cyan}  DOMAIN ENGAGEMENT                                                   ${colors.magenta}║${colors.reset}`);
     const topDomains = Object.entries(stats.domains).sort((a, b) => (b[1].sent + b[1].failed) - (a[1].sent + a[1].failed)).slice(0, 3);
     for (const [domain, dstats] of topDomains) {
         const dtotal = dstats.sent + dstats.failed;
         const drate = dtotal > 0 ? ((dstats.sent / dtotal) * 100).toFixed(0) : 0;
-        const barWidth = 15;
+        const barWidth = 20;
         const filled = Math.round((dstats.sent / Math.max(dtotal, 1)) * barWidth);
         const bar = colors.green + '█'.repeat(filled) + colors.red + '░'.repeat(barWidth - filled) + colors.reset;
-        console.log(`${colors.cyan}║${colors.white}  ${domain.padEnd(20)} ${bar} ${drate}% (${dstats.sent}/${dtotal})${colors.cyan}${' '.repeat(15 - drate.length - dstats.sent.toString().length - dtotal.toString().length)}║${colors.reset}`);
+        console.log(`${colors.magenta}║${colors.white}  ${domain.padEnd(20)} ${bar} ${drate}% (${dstats.sent}/${dtotal})${colors.magenta}${' '.repeat(16 - drate.toString().length - dstats.sent.toString().length - dtotal.toString().length)}║${colors.reset}`);
     }
-    console.log(`${colors.cyan}╠═════════════════════════════════════════════════════════════════╣${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  CURRENT TARGET: ${colors.yellow}${stats.currentEmail.padEnd(47)}${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}║${colors.white}  SPAM SCORE    : ${scoreColor}${stats.currentSpamScore.toString().padEnd(47)}${colors.cyan}║${colors.reset}`);
-    console.log(`${colors.cyan}╚═════════════════════════════════════════════════════════════════╝${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  STATUS: ${colors.bright}${stats.status.padEnd(12)}${colors.white} TIME: ${elapsed.toString().padEnd(8)}s TOTAL: ${stats.total.toString().padEnd(8)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  TARGET: ${colors.yellow}${stats.currentEmail.padEnd(51).substring(0, 51)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  SPAM SCORE: ${scoreColor}${stats.currentSpamScore.toString().padEnd(5) }${colors.white} DNS VERIFY: ${stats.dnsVerified ? colors.green+'ENABLED' : colors.red+'DISABLED'}${colors.reset}${' '.repeat(25)}${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╚══════════════════════════════════════════════════════════════════════╝${colors.reset}`);
 }
 
 async function getMx(email) {
@@ -404,51 +408,79 @@ async function loadAppConfig() {
     }
 }
 
-async function checkDirectMxConnectivity(proxyUrl) {
-    console.log(`${colors.cyan}[+] Checking Direct MX Connectivity (Port 25)...${colors.reset}`);
-
-    // Check proxy first if used
-    if (proxyUrl) {
+async function validateProxies(proxyList) {
+    console.log(`${colors.cyan}[+] Validating ${proxyList.length} proxies...${colors.reset}`);
+    stats.proxies.total = proxyList.length;
+    const validProxies = [];
+    for (const proxyUrl of proxyList) {
         try {
             const url = new URL(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
             const proxyOptions = {
                 proxy: { host: url.hostname, port: parseInt(url.port) || 1080, type: url.protocol.startsWith('socks4') ? 4 : 5 },
                 command: 'connect',
-                destination: { host: 'google.com', port: 80 } // Just to test proxy health
+                destination: { host: '1.1.1.1', port: 53 } // DNS test
             };
             if (url.username) { proxyOptions.proxy.userId = url.username; proxyOptions.proxy.password = url.password; }
 
             await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
                 socks.SocksClient.createConnection(proxyOptions, (err, info) => {
+                    clearTimeout(timeout);
                     if (err) return reject(err);
                     info.socket.destroy();
                     resolve();
                 });
             });
-            console.log(`${colors.green}  [OK] SOCKS Proxy is healthy.${colors.reset}`);
+            validProxies.push(proxyUrl);
+            stats.proxies.live = validProxies.length;
+            console.log(`${colors.green}  [ALIVE] ${proxyUrl}${colors.reset}`);
         } catch (err) {
-            console.log(`${colors.red}  [FAIL] SOCKS Proxy error: ${err.message}${colors.reset}`);
-            return false;
+            console.log(`${colors.red}  [DEAD] ${proxyUrl}: ${err.message}${colors.reset}`);
         }
     }
+    return validProxies;
+}
 
-    // Checking if outbound port 25 is open (directly)
-    // Note: This might fail if the environment blocks port 25, which is why we often use proxies.
+async function checkDirectMxConnectivity(proxyUrl) {
+    console.log(`${colors.cyan}[+] Checking Direct MX Connectivity (Port 25)...${colors.reset}`);
+
+    // Checking Port 25 connectivity
     try {
-        const socket = require('net').createConnection(25, 'mx1.emailsrvr.com'); // Test against a known MX
-        socket.setTimeout(5000);
-        await new Promise((resolve, reject) => {
-            socket.on('connect', () => { socket.destroy(); resolve(); });
-            socket.on('error', reject);
-            socket.on('timeout', () => { socket.destroy(); reject(new Error('timeout')); });
-        });
-        console.log(`${colors.green}  [OK] Outbound Port 25 is open.${colors.reset}`);
-    } catch (err) {
+        const testHost = 'mx1.emailsrvr.com';
         if (proxyUrl) {
-            console.log(`${colors.yellow}  [INFO] Outbound Port 25 blocked locally, but will use Proxy.${colors.reset}`);
+            const url = new URL(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
+            const proxyOptions = {
+                proxy: { host: url.hostname, port: parseInt(url.port) || 1080, type: url.protocol.startsWith('socks4') ? 4 : 5 },
+                command: 'connect',
+                destination: { host: testHost, port: 25 }
+            };
+            if (url.username) { proxyOptions.proxy.userId = url.username; proxyOptions.proxy.password = url.password; }
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
+                socks.SocksClient.createConnection(proxyOptions, (err, info) => {
+                    clearTimeout(timeout);
+                    if (err) return reject(err);
+                    info.socket.destroy();
+                    resolve();
+                });
+            });
+            console.log(`${colors.green}  [OK] Port 25 is reachable via Proxy.${colors.reset}`);
+            stats.port25 = 'Proxied';
         } else {
-            console.log(`${colors.red}  [WARN] Outbound Port 25 seems blocked. Direct sending might fail without proxy.${colors.reset}`);
+            const socket = require('net').createConnection(25, testHost);
+            socket.setTimeout(5000);
+            await new Promise((resolve, reject) => {
+                socket.on('connect', () => { socket.destroy(); resolve(); });
+                socket.on('error', reject);
+                socket.on('timeout', () => { socket.destroy(); reject(new Error('timeout')); });
+            });
+            console.log(`${colors.green}  [OK] Outbound Port 25 is open locally.${colors.reset}`);
+            stats.port25 = 'Open';
         }
+    } catch (err) {
+        console.log(`${colors.red}  [FAIL] Port 25 is unreachable: ${err.message}${colors.reset}`);
+        stats.port25 = 'Blocked';
     }
     return true;
 }
@@ -461,12 +493,13 @@ async function loadLetters(dirPath) {
 }
 
 async function chooseSendingMethod() {
-    console.log(`\n${colors.cyan}Choose Sending Method:${colors.reset}`);
+    console.log(`\n${colors.cyan}Choose Action:${colors.reset}`);
     console.log(`${colors.white}  1. SMTP (from smtp.txt)${colors.reset}`);
     console.log(`${colors.white}  2. API Configs (AWS, Brevo, Mailgun, SendGrid)${colors.reset}`);
     console.log(`${colors.white}  3. Direct MX Proxy Sending${colors.reset}`);
+    console.log(`${colors.yellow}  4. Run Pre-Send Connectivity & Proxy Diagnostic${colors.reset}`);
 
-    const choice = await askQuestion('\nSelect option (1-3): ');
+    const choice = await askQuestion('\nSelect option (1-4): ');
     return choice.trim();
 }
 
@@ -522,12 +555,12 @@ const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
 ];
 
-async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend, config) {
+async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyList, testEmailAddress, useProxy, verifyBeforeSend, config) {
     try {
         let rawEmailList = await loadFiles(emailListPath);
         stats.total = rawEmailList.length;
         stats.dnsVerified = verifyBeforeSend;
-        const proxies = useProxy ? await loadFiles(proxyListPath) : [];
+        const proxies = useProxy ? proxyList : [];
         const subjects = await loadFiles(subjectPath);
         const letters = await loadLetters(lettersDir);
         const fromEmails = await loadFiles(path.join(__dirname, 'from_emails.txt'));
@@ -655,7 +688,16 @@ async function run() {
     await checkLicense();
     await printLines();
 
-    const method = await chooseSendingMethod();
+    let method = await chooseSendingMethod();
+
+    if (method === '4') {
+        const proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+        await validateProxies(proxies);
+        await checkDirectMxConnectivity(proxies.length > 0 ? proxies[0] : null);
+        await askQuestion('\nDiagnostic complete. Press Enter to return to menu...');
+        return run();
+    }
+
     let smtpConfigs = [];
     let directMxOptions = await loadDirectMxConfig();
     let appConfig = await loadAppConfig();
@@ -666,9 +708,15 @@ async function run() {
         smtpConfigs = await loadApiConfigs();
     } else if (method === '3') {
         smtpConfigs = [{ type: 'direct', ...directMxOptions }];
-        const proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
-        const useProxy = proxies.length > 0;
-        await checkDirectMxConnectivity(useProxy ? proxies[0] : null);
+        let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+        if (proxies.length > 0) {
+            proxies = await validateProxies(proxies);
+            if (proxies.length === 0) {
+                console.error(`${colors.red}[!] No live proxies found!${colors.reset}`);
+                process.exit(1);
+            }
+        }
+        await checkDirectMxConnectivity(proxies.length > 0 ? proxies[0] : null);
     } else {
         console.error(`${colors.red}[!] Invalid selection.${colors.reset}`);
         process.exit(1);
@@ -692,7 +740,12 @@ async function run() {
         directMxOptions: directMxOptions
     };
 
-    await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, true, true, false, 80, path.join(__dirname, 'proxies.txt'), '', true, directMxOptions.verifyDns, config);
+    let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+    if (proxies.length > 0) {
+        proxies = await validateProxies(proxies);
+    }
+
+    await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, true, true, false, 80, proxies, '', true, directMxOptions.verifyDns, config);
 }
 
 async function printLines() {

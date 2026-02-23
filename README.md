@@ -50,10 +50,20 @@ All configuration files use a readable `.sys` (JSON) format.
 - `links.txt`: URL rotation for the `[-link-]` tag.
 
 ### 3. Starting the Sender
-Run `start.bat` in your preferred project folder. Select the sending mode:
+Run `start.bat` in your preferred project folder. Select the action:
 1. **SMTP:** Uses servers from `smtp.txt`.
 2. **API:** Uses configurations from `aws.sys`, `mailgun.sys`, etc.
 3. **Direct MX:** Sends directly to recipient servers on Port 25 via proxies.
+4. **Diagnostic:** Runs a pre-send check on Port 25 and validates all proxies in `proxies.txt`.
+
+---
+
+## 🔍 Proxy Validation & Diagnostics
+
+The sender includes a built-in proxy validator and connectivity diagnostic tool.
+- **Auto-Validation:** Every time you start a mailing campaign, the tool automatically validates your `proxies.txt` and filters out dead proxies to ensure high success rates.
+- **Port 25 Check:** The tool verifies if Port 25 is reachable (either locally or through your SOCKS proxies) before starting.
+- **Manual Diagnostic:** You can choose option **4** from the main menu to run a full health check on your environment and proxy list without sending any emails.
 
 ---
 

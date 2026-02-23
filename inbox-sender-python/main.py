@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import asyncio
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -92,7 +93,9 @@ stats = {
     'status': 'Idle', 'spam_score': 0.0,
     'bounces': {'hard': 0, 'soft': 0, 'spam': 0},
     'domains': {},
-    'dns_verified': False
+    'dns_verified': False,
+    'proxies': {'live': 0, 'total': 0},
+    'port25': 'Unknown'
 }
 
 def update_ui():
@@ -103,8 +106,11 @@ def update_ui():
     main_table.add_row(f"[bold white]DELIVERED[/bold white]", f"[bold green]{stats['sent']}", f"[bold white]STATUS[/bold white]", f"[cyan]{stats['status']}")
     main_table.add_row(f"[bold white]FAILED[/bold white]", f"[bold red]{stats['failed']}", f"[bold white]ELAPSED[/bold white]", f"{round(time.time() - stats['start_time'], 1)}s")
     main_table.add_row(f"[bold white]SUCCESS RATE[/bold white]", f"[bold yellow]{success_rate}%", f"[bold white]TOTAL[/bold white]", f"{stats['total']}")
+
     dns_status = "[bold green]ENABLED[/bold green]" if stats['dns_verified'] else "[bold red]DISABLED[/bold red]"
-    main_table.add_row(f"[bold white]DNS VERIFY[/bold white]", dns_status, f"[bold white]ELAPSED[/bold white]", f"{round(time.time() - stats['start_time'], 1)}s")
+    diag_table = Table(show_header=False, box=None, expand=True)
+    p25_col = "[green]Open[/green]" if stats['port25'] == 'Open' else ("[red]Blocked[/red]" if stats['port25'] == 'Blocked' else "[yellow]Proxied[/yellow]")
+    diag_table.add_row(f"DNS VERIFY: {dns_status}", f"PORT 25: {p25_col}", f"PROXIES: [green]{stats['proxies']['live']}/{stats['proxies']['total']} Live[/green]")
 
     bounce_table = Table(show_header=False, box=None, expand=True)
     bounce_table.add_row(f"HARD: [red]{stats['bounces']['hard']}", f"SOFT: [yellow]{stats['bounces']['soft']}", f"SPAM: [red]{stats['bounces']['spam']}")
@@ -125,6 +131,7 @@ def update_ui():
     layout.split_column(
         Layout(Panel(f"[bold cyan]magxxicVox Inbox Sender[/bold cyan] [magenta]v4.0[/magenta]", border_style="cyan", subtitle="[white]Military Grade Email Deployment")),
         Layout(Panel(main_table, title="[bold white]Delivery Metrics", border_style="green")),
+        Layout(Panel(diag_table, title="[bold white]Diagnostic Intelligence", border_style="cyan")),
         Layout(Panel(bounce_table, title="[bold white]Bounce Intelligence", border_style="yellow")),
         Layout(Panel(domain_table, border_style="magenta")),
         Layout(Panel(f"[bold white]TARGET:[/bold white] [yellow]{stats['current_email']}[/yellow]  |  [bold white]SPAM SCORE:[/bold white] [red]{stats['spam_score']}[/red]", border_style="white"))
@@ -202,19 +209,47 @@ def load_dkim_config():
     except Exception: pass
     return None
 
+def validate_proxies(proxy_list):
+    print(Fore.CYAN + f"[+] Validating {len(proxy_list)} proxies...")
+    stats['proxies']['total'] = len(proxy_list)
+    valid_proxies = []
+    import socks
+    for proxy_url in proxy_list:
+        try:
+            url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
+            s = socks.socksocket()
+            s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+            s.settimeout(5)
+            s.connect(('1.1.1.1', 53))
+            s.close()
+            valid_proxies.append(proxy_url)
+            stats['proxies']['live'] = len(valid_proxies)
+            print(Fore.GREEN + f"  [ALIVE] {proxy_url}")
+        except Exception as e:
+            print(Fore.RED + f"  [DEAD] {proxy_url}: {str(e)[:30]}")
+    return valid_proxies
+
 def check_direct_mx_connectivity(proxy_url=None):
     print(Fore.CYAN + "[+] Checking Direct MX Connectivity (Port 25)...")
-    if proxy_url:
-        print(Fore.YELLOW + "  [INFO] Proxy check not implemented in this Python helper, but will be used in transport.")
-
+    test_host = 'mx1.emailsrvr.com'
     try:
-        socket.create_connection(('mx1.emailsrvr.com', 25), timeout=5)
-        print(Fore.GREEN + "  [OK] Outbound Port 25 is open.")
-    except Exception:
         if proxy_url:
-            print(Fore.YELLOW + "  [INFO] Outbound Port 25 blocked locally, but will use Proxy.")
+            import socks
+            url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
+            s = socks.socksocket()
+            s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+            s.settimeout(5)
+            s.connect((test_host, 25))
+            s.close()
+            print(Fore.GREEN + f"  [OK] Port 25 is reachable via Proxy.")
+            stats['port25'] = 'Proxied'
         else:
-            print(Fore.RED + "  [WARN] Outbound Port 25 seems blocked. Direct sending might fail without proxy.")
+            socket.create_connection((test_host, 25), timeout=5)
+            print(Fore.GREEN + "  [OK] Outbound Port 25 is open locally.")
+            stats['port25'] = 'Open'
+    except Exception as e:
+        print(Fore.RED + f"  [FAIL] Port 25 is unreachable: {str(e)[:30]}")
+        stats['port25'] = 'Blocked'
     return True
 
 def encrypt_attachment(data, method, password):
@@ -326,8 +361,16 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
 async def main():
     if not await check_license(): return
 
-    print("\n1. SMTP (from smtp.txt)\n2. API (aws.sys, brevo.sys, etc.)\n3. Direct MX (Port 25)")
-    mode = input("Select mode (1-3): ").strip()
+    print(Fore.CYAN + "\n1. SMTP (from smtp.txt)\n2. API (aws.sys, brevo.sys, etc.)\n3. Direct MX (Port 25)\n" + Fore.YELLOW + "4. Run Pre-Send Connectivity & Proxy Diagnostic")
+    mode = input(Fore.WHITE + "Select mode (1-4): ").strip()
+
+    if mode == '4':
+        proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
+        validate_proxies(proxies)
+        check_direct_mx_connectivity(proxies[0] if proxies else None)
+        input(Fore.WHITE + "\nDiagnostic complete. Press Enter to return to menu...")
+        import asyncio
+        return await main()
 
     configs = []
     direct_mx_options = load_direct_mx_config()
@@ -348,8 +391,6 @@ async def main():
                     configs.append(data)
     elif mode == '3':
         configs = [{'type': 'direct', **direct_mx_options}]
-        proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
-        check_direct_mx_connectivity(proxies[0] if proxies else None)
 
     if not configs: print("No configurations found!"); return
     if mode != '3': configs = check_smtp_configs(configs)
@@ -361,7 +402,16 @@ async def main():
     letters = [os.path.join(os.path.dirname(__file__), 'letters', f) for f in os.listdir(os.path.join(os.path.dirname(__file__), 'letters')) if f.endswith('.html')]
     links = load_files(os.path.join(os.path.dirname(__file__), 'links.txt'))
     from_emails = load_files(os.path.join(os.path.dirname(__file__), 'from_emails.txt'))
+
     proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
+    if proxies:
+        proxies = validate_proxies(proxies)
+        if not proxies and mode == '3':
+            print(Fore.RED + "[!] No live proxies found for Direct MX!")
+            return
+
+    if mode == '3':
+        check_direct_mx_connectivity(proxies[0] if proxies else None)
 
     with Live(update_ui(), refresh_per_second=4) as live:
         from_idx = 0
@@ -450,5 +500,4 @@ async def main():
             time.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
