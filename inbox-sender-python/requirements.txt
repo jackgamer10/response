@@ -9,3 +9,4 @@ html2image
 psutil
 PySocks
 Pillow
+colorama

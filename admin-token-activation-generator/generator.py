@@ -6,16 +6,20 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import os
 import sys
+from colorama import init, Fore, Style
+
+# Initialize colorama
+init(autoreset=True)
 
 class Colors:
-    RESET = "\033[0m"
-    BRIGHT = "\033[1m"
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    CYAN = "\033[36m"
-    MAGENTA = "\033[35m"
-    RED = "\033[31m"
-    WHITE = "\033[37m"
+    RESET = Style.RESET_ALL
+    BRIGHT = Style.BRIGHT
+    GREEN = Fore.GREEN
+    YELLOW = Fore.YELLOW
+    CYAN = Fore.CYAN
+    MAGENTA = Fore.MAGENTA
+    RED = Fore.RED
+    WHITE = Fore.WHITE
 
 SECRET_SALT = 'magxxicVox_Super_Secure_Salt_2024'
 

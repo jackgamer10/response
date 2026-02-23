@@ -36,6 +36,10 @@ from rich.table import Table
 from rich.layout import Layout
 import platform
 import uuid
+from colorama import init, Fore, Style
+
+# Initialize Colorama for beautiful cross-platform colors
+init(autoreset=True)
 
 # --- Core Obfuscation & License ---
 
@@ -65,19 +69,19 @@ async def check_license():
             with open(activation_path, 'r') as f:
                 data = decode_obf(f.read())
             if data.get('hwid') == hwid and data.get('token') == generate_token(hwid):
-                print(f"\033[92m[+] License activated for HWID: {hwid[:8]}...\033[0m")
+                print(Fore.GREEN + f"[+] License activated for HWID: {hwid[:8]}...")
                 return True
         except Exception: pass
-    print("\033[93m[!] Software not activated.\033[0m")
-    print(f"\033[96mYour HWID: \033[1m{hwid}\033[0m")
-    token = input('Enter Activation Token: ').strip().upper()
+    print(Fore.YELLOW + "[!] Software not activated.")
+    print(Fore.CYAN + f"Your HWID: " + Style.BRIGHT + f"{hwid}")
+    token = input(Fore.WHITE + 'Enter Activation Token: ').strip().upper()
     if token == generate_token(hwid):
         data = {'hwid': hwid, 'token': token, 'installPath': os.path.dirname(__file__)}
         with open(activation_path, 'w') as f: f.write(encode_obf(data))
-        print("\033[92m[+] Activation successful! Please restart.\033[0m")
+        print(Fore.GREEN + "[+] Activation successful! Please restart.")
         sys.exit(0)
     else:
-        print("\033[91m[!] Invalid activation token.\033[0m")
+        print(Fore.RED + "[!] Invalid activation token.")
         sys.exit(1)
 
 # --- Statistics & UI ---
@@ -199,18 +203,18 @@ def load_dkim_config():
     return None
 
 def check_direct_mx_connectivity(proxy_url=None):
-    print(f"\033[96m[+] Checking Direct MX Connectivity (Port 25)...\033[0m")
+    print(Fore.CYAN + "[+] Checking Direct MX Connectivity (Port 25)...")
     if proxy_url:
-        print(f"\033[93m  [INFO] Proxy check not implemented in this Python helper, but will be used in transport.\033[0m")
+        print(Fore.YELLOW + "  [INFO] Proxy check not implemented in this Python helper, but will be used in transport.")
 
     try:
         socket.create_connection(('mx1.emailsrvr.com', 25), timeout=5)
-        print(f"\033[92m  [OK] Outbound Port 25 is open.\033[0m")
+        print(Fore.GREEN + "  [OK] Outbound Port 25 is open.")
     except Exception:
         if proxy_url:
-            print(f"\033[93m  [INFO] Outbound Port 25 blocked locally, but will use Proxy.\033[0m")
+            print(Fore.YELLOW + "  [INFO] Outbound Port 25 blocked locally, but will use Proxy.")
         else:
-            print(f"\033[91m  [WARN] Outbound Port 25 seems blocked. Direct sending might fail without proxy.\033[0m")
+            print(Fore.RED + "  [WARN] Outbound Port 25 seems blocked. Direct sending might fail without proxy.")
     return True
 
 def encrypt_attachment(data, method, password):
@@ -240,19 +244,19 @@ def replace_tags(text, replacements):
 
 def check_smtp_configs(configs):
     live = []
-    print(f"\033[96m[+] Checking SMTP configurations...\033[0m")
+    print(Fore.CYAN + "[+] Checking SMTP configurations...")
     for c in configs:
         try:
             if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
-                print(f"\033[93m  [SKIP] API Config: {c['type']}\033[0m")
+                print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
                 live.append(c); continue
             with smtplib.SMTP(c['host'], c['port'], timeout=10) as server:
                 server.starttls()
                 server.login(c['user'], c['pass'])
                 live.append(c)
-                print(f"\033[92m  [LIVE] {c['host']}\033[0m")
+                print(Fore.GREEN + f"  [LIVE] {c['host']}")
         except Exception as e:
-            print(f"\033[91m  [DEAD] {c.get('host', 'API')}: {str(e)[:30]}\033[0m")
+            print(Fore.RED + f"  [DEAD] {c.get('host', 'API')}: {str(e)[:30]}")
     return live
 
 def send_email(transport_config, email, content, subject, attachments, dkim_options, config):
