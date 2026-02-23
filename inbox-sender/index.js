@@ -33,6 +33,17 @@ const colors = {
     white: "\x1b[37m"
 };
 
+let stats = {
+    total: 0,
+    sent: 0,
+    failed: 0,
+    invalid: 0,
+    startTime: Date.now(),
+    currentEmail: '',
+    currentSmtp: '',
+    currentProxy: ''
+};
+
 function askQuestion(query) {
     console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
     const rl = readline.createInterface({
@@ -80,23 +91,29 @@ async function checkLicense() {
     }
 }
 
-async function printLines() {
-    console.log(`${colors.cyan}magxxicVox Inbox Sender Start${colors.reset}\n`);
-    console.log(`${colors.magenta}
-███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗██╗ ██████╗██╗   ██╗ ██████╗ ██╗  ██╗
-████╗ ████║██╔══██╗██╔════╝ ╚██╗██╔╝╚██╗██╔╝██║██╔════╝██║   ██║██╔═══██╗╚██╗██╔╝
-██╔████╔██║███████║██║  ███╗ ╚███╔╝  ╚███╔╝ ██║██║     ██║   ██║██║   ██║ ╚███╔╝
-██║╚██╔╝██║██╔══██║██║   ██║ ██╔██╗  ██╔██╗ ██║██║     ╚██╗ ██╔╝██║   ██║ ██╔██╗
-██║ ╚═╝ ██║██║  ██║╚██████╔╝██╔╝ ██╗██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝██╔╝ ██╗
-╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝
-${colors.reset}`);
-    console.log(`${colors.bright}[+] magxxicVox Sender v4${colors.reset}`);
-    console.log(`${colors.cyan}[+] Best For All Spamming Hit Aol Yahoo Office Gmail${colors.reset}`);
-    console.log(`${colors.yellow}[+] Code By magxxicVox Inbox${colors.reset}`);
+function updateStatsUI() {
+    const elapsed = ((Date.now() - stats.startTime) / 1000).toFixed(1);
+    const remaining = stats.total - (stats.sent + stats.failed + stats.invalid);
+
+    // Clear screen and move cursor to top
+    process.stdout.write('\x1B[2J\x1B[0f');
+
+    console.log(`${colors.magenta}┌─────────────────────────────────────────────────────────────────┐${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}         magxxicVox Inbox Sender - Live Statistics               ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.white}  Total Loaded: ${stats.total.toString().padEnd(10)} | Elapsed Time: ${elapsed.toString().padEnd(10)}s ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.green}  Sent: ${stats.sent.toString().padEnd(10)}         ${colors.red}| Failed: ${stats.failed.toString().padEnd(10)}       ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.yellow}  Invalid: ${stats.invalid.toString().padEnd(10)}      ${colors.white}| Remaining: ${remaining.toString().padEnd(10)}    ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current Email : ${stats.currentEmail.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current SMTP  : ${stats.currentSmtp.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Current Proxy : ${stats.currentProxy.padEnd(47)} ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}└─────────────────────────────────────────────────────────────────┘${colors.reset}`);
 }
 
 async function getMx(email) {
     const domain = email.split('@')[1];
+    if (!domain) return null;
     try {
         const addresses = await dns.resolveMx(domain);
         if (!addresses || addresses.length === 0) return null;
@@ -105,6 +122,16 @@ async function getMx(email) {
     } catch (err) {
         return null;
     }
+}
+
+async function verifyEmail(email) {
+    // Basic syntax check
+    const re = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    if (!re.test(String(email).toLowerCase())) return false;
+
+    // DNS MX check
+    const mx = await getMx(email);
+    return mx !== null;
 }
 
 async function createTransporter(config, proxy, recipientEmail = null) {
@@ -154,7 +181,7 @@ async function createTransporter(config, proxy, recipientEmail = null) {
             host: mxHost,
             port: 25,
             secure: false,
-            tls: { rejectUnauthorized: false }
+            tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' }
         };
     } else {
         transport = { ...config };
@@ -195,22 +222,15 @@ async function loadFiles(filePath) {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '');
     } catch (err) {
-        console.warn(`${colors.yellow}[!] Warning: Could not read file ${filePath}: ${err.message}${colors.reset}`);
         return [];
     }
 }
 
 async function loadSmtpConfigs(filePath) {
     const lines = await loadFiles(filePath);
-    if (lines.length === 0) {
-        console.error(`${colors.red}[!] Error: ${filePath} is empty or not found.${colors.reset}`);
-    }
     return lines.map(line => {
         const parts = line.split('|').map(p => p.trim());
-        if (parts.length < 4) {
-            console.warn(`${colors.yellow}[!] Skipping invalid SMTP line: ${line}${colors.reset}`);
-            return null;
-        }
+        if (parts.length < 4) return null;
         const [host, port, user, pass, fromEmail] = parts;
         return {
             host,
@@ -228,13 +248,8 @@ async function loadSmtpConfigs(filePath) {
 async function loadLetters(dirPath) {
     try {
         const files = await fs.readdir(dirPath);
-        const htmlFiles = files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
-        if (htmlFiles.length === 0) {
-            console.warn(`${colors.yellow}[!] Warning: No .html files found in ${dirPath}${colors.reset}`);
-        }
-        return htmlFiles;
+        return files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
     } catch (err) {
-        console.warn(`${colors.yellow}[!] Warning: Could not read directory ${dirPath}: ${err.message}${colors.reset}`);
         return [];
     }
 }
@@ -277,16 +292,17 @@ function replaceTags(text, replacements) {
     return newText;
 }
 
-async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy) {
-    try {
-        if (!smtpConfigs || smtpConfigs.length === 0) {
-            throw new Error("No SMTP configurations found. Please check smtp.txt");
-        }
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
+];
 
-        const emailList = await loadFiles(emailListPath);
-        if (emailList.length === 0) {
-            throw new Error(`Email list ${emailListPath} is empty or not found.`);
-        }
+async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend) {
+    try {
+        let rawEmailList = await loadFiles(emailListPath);
+        stats.total = rawEmailList.length;
 
         const proxies = useProxy ? await loadFiles(proxyListPath) : [];
         const subjects = await loadFiles(subjectPath);
@@ -294,9 +310,22 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
         let smtpIndex = 0;
         let proxyIndex = 0;
-        let sentCount = 0;
 
-        for (const email of emailList) {
+        for (const email of rawEmailList) {
+            stats.currentEmail = email;
+            stats.currentSmtp = smtpConfigs[smtpIndex] ? (smtpConfigs[smtpIndex].host || smtpConfigs[smtpIndex].type) : 'None';
+            stats.currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : 'None';
+            updateStatsUI();
+
+            if (verifyBeforeSend) {
+                const isValid = await verifyEmail(email);
+                if (!isValid) {
+                    stats.invalid++;
+                    updateStatsUI();
+                    continue;
+                }
+            }
+
             const currentSmtpConfig = smtpConfigs[smtpIndex];
             const currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : null;
 
@@ -309,7 +338,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 };
 
                 const letterPath = letters[Math.floor(Math.random() * letters.length)];
-                if (!letterPath) throw new Error("No letters found in letters/ directory");
+                if (!letterPath) throw new Error("No letters found");
 
                 const emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
                 const emailSubject = replaceTags(subjects[Math.floor(Math.random() * subjects.length)] || "No Subject", replacements);
@@ -319,9 +348,9 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
                 let fromAddress;
                 if (hideFromEmail) {
-                    fromAddress = `"${dynamicSenderName}" <${randomstring.generate(5)}@${replacements['-emaildomain-']}>`;
+                    fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`;
                 } else {
-                    const fromEmail = useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : (currentSmtpConfig.auth ? currentSmtpConfig.auth.user : 'noreply@' + replacements['-emaildomain-']);
+                    const fromEmail = useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : (currentSmtpConfig.auth ? currentSmtpConfig.auth.user : 'info@' + replacements['-emaildomain-']);
                     fromAddress = `"${dynamicSenderName}" <${fromEmail}>`;
                 }
 
@@ -331,7 +360,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     subject: emailSubject,
                     html: emailContent,
                     attachments: [],
-                    messageId: `<${randomstring.generate()}@${replacements['-emaildomain-']}>`
+                    messageId: `<${randomstring.generate(12).toLowerCase()}@${replacements['-emaildomain-']}>`
                 };
 
                 if (sendPdfAttachment) {
@@ -342,39 +371,39 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     mailOptions.attachments.push({ filename: dynamicPdfName, content: pdfBuffer, contentType: 'application/pdf' });
                 }
 
+                // Military/Strong Tech Grade MIME Headers
                 const spoofIp = () => `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
                 mailOptions.headers = {
-                    'X-Originating-IP': spoofIp(),
-                    'X-Mailer': 'Microsoft Outlook 16.0',
-                    'X-Forwarded-For': spoofIp(),
-                    'X-Real-IP': spoofIp(),
+                    'X-Priority': '1 (Highest)',
                     'X-MSMail-Priority': 'High',
                     'Importance': 'High',
-                    'X-Priority': '1'
+                    'MIME-Version': '1.0',
+                    'X-Mailer': 'Microsoft Outlook 16.0',
+                    'X-Authenticated-User': fromAddress,
+                    'X-Originating-IP': spoofIp(),
+                    'X-Forwarded-For': spoofIp(),
+                    'X-Real-IP': spoofIp(),
+                    'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+                    'Content-Language': 'en-US',
+                    'X-Content-Type-Options': 'nosniff',
+                    'X-Complaints-To': `abuse@${replacements['-emaildomain-']}`,
+                    'List-Unsubscribe': `<mailto:unsubscribe@${replacements['-emaildomain-']}?subject=unsubscribe>`
                 };
 
                 await transporter.sendMail(mailOptions);
-                sentCount++;
+                stats.sent++;
+                updateStatsUI();
 
-                console.log(`${colors.magenta}==================================================${colors.reset}`);
-                console.log(`${colors.cyan}To               :${colors.reset} ${email}`);
-                console.log(`${colors.cyan}Subject          :${colors.reset} ${emailSubject}`);
-                console.log(`${colors.cyan}Smtp             :${colors.reset} ${currentSmtpConfig.type || currentSmtpConfig.host || 'Default'}`);
-                console.log(`${colors.cyan}Proxy            :${colors.reset} ${currentProxy || 'None'}`);
-                console.log(`${colors.cyan}Status           :${colors.reset} ${colors.green}Sent${colors.reset}`);
-                console.log(`${colors.cyan}Sent Total       :${colors.reset} ${sentCount}`);
-                console.log(`${colors.magenta}==================================================${colors.reset}`);
-
-                if (sentCount % 100 === 0 && testEmailAddress) {
-                    console.log(`${colors.yellow}[!] Sending test email...${colors.reset}`);
-                    await transporter.sendMail({ ...mailOptions, to: testEmailAddress, subject: `TEST - ${sentCount}` }).catch(()=>{});
+                if (stats.sent % 100 === 0 && testEmailAddress) {
+                    await transporter.sendMail({ ...mailOptions, to: testEmailAddress, subject: `TEST - ${stats.sent}` }).catch(()=>{});
                 }
 
             } catch (err) {
-                console.error(`${colors.red}Failed to send to ${email}: ${err.message}${colors.reset}`);
+                stats.failed++;
+                updateStatsUI();
                 await fs.appendFile(path.join(__dirname, 'undeliverable_emails.log'), `${email} | ERROR: ${err.message}\n`).catch(() => {});
             } finally {
-                smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                if (smtpConfigs.length > 0) smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
                 if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
                 await new Promise(resolve => setTimeout(resolve, delayBetweenEmails));
             }
@@ -386,7 +415,6 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
 async function run() {
     await checkLicense();
-    await printLines();
 
     const smtpConfigsPath = path.join(__dirname, 'smtp.txt');
     const emailListPath = path.join(__dirname, 'list.txt');
@@ -396,6 +424,9 @@ async function run() {
     const attachmentHtmlPath = path.join(__dirname, 'attachment.html');
 
     const smtpConfigs = await loadSmtpConfigs(smtpConfigsPath);
+
+    // Optional: Add direct mode if smtp.txt is empty or as an option
+    // smtpConfigs.push({ type: 'direct' });
 
     const senderName = ' [-emailuser-] via Docusign ';
     const pdfAttachmentName = 'overdue_bill_[-randomnumber-].pdf';
@@ -407,8 +438,11 @@ async function run() {
     const useCustomFromEmail = false;
     const pdfQuality = 80;
     const useProxy = false;
+    const verifyBeforeSend = true; // DNS and MX verification
 
-    await sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy);
+    await sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend);
+
+    console.log(`\n${colors.green}Sending session finished.${colors.reset}`);
 }
 
 run();
