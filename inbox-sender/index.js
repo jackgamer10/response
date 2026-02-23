@@ -307,7 +307,14 @@ async function createTransporter(config, proxy, recipientEmail = null, dkimOptio
         if (!recipientEmail) throw new Error("Recipient email required");
         const mxHost = await getMx(recipientEmail);
         if (!mxHost) throw new Error(`No MX for ${recipientEmail}`);
-        transport = { host: mxHost, port: 25, secure: false, tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' } };
+        transport = {
+            host: mxHost,
+            port: 25,
+            secure: false,
+            tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
+            connectionTimeout: config.timeout || 10000,
+            greetingTimeout: config.timeout || 10000
+        };
     } else { transport = { ...config }; }
 
     if (dkimOptions && transport) {
@@ -638,7 +645,7 @@ async function run() {
     } else if (method === '2') {
         smtpConfigs = await loadApiConfigs();
     } else if (method === '3') {
-        smtpConfigs = [{ type: 'direct' }];
+        smtpConfigs = [{ type: 'direct', ...directMxOptions }];
         const proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
         const useProxy = proxies.length > 0;
         await checkDirectMxConnectivity(useProxy ? proxies[0] : null);

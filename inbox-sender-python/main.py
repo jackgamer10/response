@@ -297,8 +297,9 @@ async def main():
                     data['type'] = f.split('.')[0]
                     configs.append(data)
     elif mode == '3':
-        configs = [{'type': 'direct'}]
-        check_direct_mx_connectivity()
+        configs = [{'type': 'direct', **direct_mx_options}]
+        proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
+        check_direct_mx_connectivity(proxies[0] if proxies else None)
 
     if not configs: print("No configurations found!"); return
     if mode != '3': configs = check_smtp_configs(configs)
@@ -310,6 +311,7 @@ async def main():
     letters = [os.path.join(os.path.dirname(__file__), 'letters', f) for f in os.listdir(os.path.join(os.path.dirname(__file__), 'letters')) if f.endswith('.html')]
     links = load_files(os.path.join(os.path.dirname(__file__), 'links.txt'))
     from_emails = load_files(os.path.join(os.path.dirname(__file__), 'from_emails.txt'))
+    proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
 
     with Live(update_ui(), refresh_per_second=4) as live:
         for idx, email in enumerate(email_list):
@@ -358,7 +360,8 @@ async def main():
                 conf = configs[idx % len(configs)].copy()
                 if from_emails: conf['from_email'] = replace_tags(random.choice(from_emails), repls)
 
-                send_email(conf, email, content, subject, atts, None, {})
+                proxy = proxies[idx % len(proxies)] if proxies else None
+                send_email(conf, email, content, subject, atts, None, {'proxy': proxy})
                 stats['sent'] += 1
                 stats['domains'][domain]['sent'] += 1
             except Exception as e:
