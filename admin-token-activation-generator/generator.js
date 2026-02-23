@@ -106,6 +106,7 @@ async function menu() {
             const directMx = {
                 retries: parseInt(await ask('Max Retries (default 3): ')) || 3,
                 timeout: parseInt(await ask('Timeout in ms (default 10000): ')) || 10000,
+                heloDomain: await ask('HELO/EHLO Domain (e.g. mail.example.com): '),
                 verifyDns: (await ask('Verify DNS/MX before send? (y/n): ')).toLowerCase() === 'y'
             };
             fs.writeFileSync('direct_mx.sys', obf.encode(directMx));

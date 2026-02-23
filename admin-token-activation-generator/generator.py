@@ -103,6 +103,7 @@ def main():
             direct_mx = {
                 'retries': int(ask('Max Retries (default 3): ') or 3),
                 'timeout': int(ask('Timeout in ms (default 10000): ') or 10000),
+                'heloDomain': ask('HELO/EHLO Domain (e.g. mail.example.com): '),
                 'verifyDns': ask('Verify DNS/MX before send? (y/n): ').lower() == 'y'
             }
             with open('direct_mx.sys', 'w') as f:

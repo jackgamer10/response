@@ -234,7 +234,7 @@ function updateStatsUI() {
     const elapsed = ((Date.now() - stats.startTime) / 1000).toFixed(1);
     const totalProcessed = stats.sent + stats.failed + stats.invalid;
     const remaining = stats.total - totalProcessed;
-    const successRate = totalProcessed > 0 ? ((stats.sent / totalProcessed) * 100).toFixed(1) : 0;
+    const successRate = totalProcessed > 0 ? ((stats.sent / (stats.sent + stats.failed)) * 100).toFixed(1) : 0;
 
     process.stdout.write('\x1B[2J\x1B[0f');
     let scoreColor = colors.green;
@@ -245,30 +245,30 @@ function updateStatsUI() {
     if (successRate < 50) rateColor = colors.red;
     else if (successRate < 80) rateColor = colors.yellow;
 
-    console.log(`${colors.magenta}┌─────────────────────────────────────────────────────────────────┐${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}         magxxicVox Inbox Sender - Live Statistics               ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.white}  DELIVERED: ${colors.green}${stats.sent.toString().padEnd(10)}${colors.white} | FAILED: ${colors.red}${stats.failed.toString().padEnd(10)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.white}  TOTAL    : ${stats.total.toString().padEnd(10)} | SUCCESS: ${rateColor}${successRate}%${colors.reset}${colors.magenta}${' '.repeat(14 - successRate.toString().length)}│${colors.reset}`);
-    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  BOUNCE ANALYSIS REPORT                                         ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.white}  Hard Bounces: ${colors.red}${stats.bounces.hard.toString().padEnd(5)}${colors.white} Soft: ${colors.yellow}${stats.bounces.soft.toString().padEnd(5)}${colors.white} Spam: ${colors.red}${stats.bounces.spam.toString().padEnd(5)}  ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  DOMAIN ENGAGEMENT REPORT (Top 5)                               ${colors.magenta}│${colors.reset}`);
-    const topDomains = Object.entries(stats.domains).sort((a, b) => (b[1].sent + b[1].failed) - (a[1].sent + a[1].failed)).slice(0, 5);
+    console.log(`${colors.cyan}╔═════════════════════════════════════════════════════════════════╗${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.bright}${colors.white}         magxxicVox Inbox Sender - OPERATION DASHBOARD           ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}╠══════════════╦══════════════════════╦═══════════════════════════╣${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  DELIVERED   ${colors.cyan}║ ${colors.green}${stats.sent.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}STATUS: ${stats.status.padEnd(12)} ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  FAILED      ${colors.cyan}║ ${colors.red}${stats.failed.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}TIME  : ${elapsed.toString().padEnd(10)}s ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  SUCCESS RATE${colors.cyan}║ ${rateColor}${successRate.toString().padEnd(19)}%${colors.cyan} ║ ${colors.white}TOTAL : ${stats.total.toString().padEnd(12)} ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}╠══════════════╩══════════════════════╩═══════════════════════════╣${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.magenta}  BOUNCE ANALYSIS                                                ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  HARD: ${colors.red}${stats.bounces.hard.toString().padEnd(10)}${colors.white} SOFT: ${colors.yellow}${stats.bounces.soft.toString().padEnd(10)}${colors.white} SPAM: ${colors.red}${stats.bounces.spam.toString().padEnd(10)}     ${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}╠═════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.magenta}  DOMAIN ENGAGEMENT                                              ${colors.cyan}║${colors.reset}`);
+    const topDomains = Object.entries(stats.domains).sort((a, b) => (b[1].sent + b[1].failed) - (a[1].sent + a[1].failed)).slice(0, 3);
     for (const [domain, dstats] of topDomains) {
         const dtotal = dstats.sent + dstats.failed;
-        const drate = ((dstats.sent / dtotal) * 100).toFixed(0);
-        const barWidth = 20;
-        const filled = Math.round((dstats.sent / dtotal) * barWidth);
+        const drate = dtotal > 0 ? ((dstats.sent / dtotal) * 100).toFixed(0) : 0;
+        const barWidth = 15;
+        const filled = Math.round((dstats.sent / Math.max(dtotal, 1)) * barWidth);
         const bar = colors.green + '█'.repeat(filled) + colors.red + '░'.repeat(barWidth - filled) + colors.reset;
-        console.log(`${colors.magenta}│${colors.white}  ${domain.padEnd(20)} ${bar} ${drate}% (${dstats.sent}/${dtotal})${colors.magenta}${' '.repeat(10 - drate.length - dstats.sent.toString().length - dtotal.toString().length)}│${colors.reset}`);
+        console.log(`${colors.cyan}║${colors.white}  ${domain.padEnd(20)} ${bar} ${drate}% (${dstats.sent}/${dtotal})${colors.cyan}${' '.repeat(15 - drate.length - dstats.sent.toString().length - dtotal.toString().length)}║${colors.reset}`);
     }
-    console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Status        : ${colors.white}${stats.status.padEnd(47)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Current Email : ${colors.white}${stats.currentEmail.padEnd(47)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Spam Score    : ${scoreColor}${stats.currentSpamScore.toString().padEnd(47)}${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}└─────────────────────────────────────────────────────────────────┘${colors.reset}`);
+    console.log(`${colors.cyan}╠═════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  CURRENT TARGET: ${colors.yellow}${stats.currentEmail.padEnd(47)}${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}║${colors.white}  SPAM SCORE    : ${scoreColor}${stats.currentSpamScore.toString().padEnd(47)}${colors.cyan}║${colors.reset}`);
+    console.log(`${colors.cyan}╚═════════════════════════════════════════════════════════════════╝${colors.reset}`);
 }
 
 async function getMx(email) {
@@ -311,6 +311,7 @@ async function createTransporter(config, proxy, recipientEmail = null, dkimOptio
             host: mxHost,
             port: 25,
             secure: false,
+            name: config.heloDomain || 'localhost',
             tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
             connectionTimeout: config.timeout || 10000,
             greetingTimeout: config.timeout || 10000
@@ -678,7 +679,7 @@ async function run() {
         directMxOptions: directMxOptions
     };
 
-    await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, false, true, false, 80, path.join(__dirname, 'proxies.txt'), '', true, directMxOptions.verifyDns, config);
+    await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, true, true, false, 80, path.join(__dirname, 'proxies.txt'), '', true, directMxOptions.verifyDns, config);
 }
 
 async function printLines() {

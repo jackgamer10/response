@@ -95,34 +95,36 @@ stats = {
 }
 
 def update_ui():
-    total_processed = stats['sent'] + stats['failed'] + stats['invalid']
-    success_rate = round((stats['sent'] / total_processed * 100), 1) if total_processed > 0 else 0
+    total_delivered_failed = stats['sent'] + stats['failed']
+    success_rate = round((stats['sent'] / total_delivered_failed * 100), 1) if total_delivered_failed > 0 else 0
 
-    main_table = Table(show_header=False, box=None)
-    main_table.add_row(f"[white]DELIVERED: [green]{stats['sent']}", f"[white]FAILED: [red]{stats['failed']}")
-    main_table.add_row(f"[white]TOTAL: {stats['total']}", f"[white]SUCCESS: {success_rate}%")
+    main_table = Table(show_header=False, box=None, expand=True)
+    main_table.add_row(f"[bold white]DELIVERED[/bold white]", f"[bold green]{stats['sent']}", f"[bold white]STATUS[/bold white]", f"[cyan]{stats['status']}")
+    main_table.add_row(f"[bold white]FAILED[/bold white]", f"[bold red]{stats['failed']}", f"[bold white]ELAPSED[/bold white]", f"{round(time.time() - stats['start_time'], 1)}s")
+    main_table.add_row(f"[bold white]SUCCESS RATE[/bold white]", f"[bold yellow]{success_rate}%", f"[bold white]TOTAL[/bold white]", f"{stats['total']}")
 
-    bounce_table = Table(show_header=False, box=None)
-    bounce_table.add_row(f"[white]Hard: [red]{stats['bounces']['hard']}", f"[white]Soft: [yellow]{stats['bounces']['soft']}", f"[white]Spam: [red]{stats['bounces']['spam']}")
+    bounce_table = Table(show_header=False, box=None, expand=True)
+    bounce_table.add_row(f"HARD: [red]{stats['bounces']['hard']}", f"SOFT: [yellow]{stats['bounces']['soft']}", f"SPAM: [red]{stats['bounces']['spam']}")
 
-    domain_table = Table(title="Domain Engagement", show_header=True, header_style="cyan", box=None)
-    domain_table.add_column("Domain")
-    domain_table.add_column("Success %")
-    domain_table.add_column("Sent/Total")
+    domain_table = Table(title="Top Domain Performance", show_header=True, header_style="bold magenta", box=None, expand=True)
+    domain_table.add_column("Domain", style="white")
+    domain_table.add_column("Progress", justify="center")
+    domain_table.add_column("Ratio", justify="right")
 
     sorted_domains = sorted(stats['domains'].items(), key=lambda x: (x[1]['sent'] + x[1]['failed']), reverse=True)[:3]
     for dom, dstats in sorted_domains:
         dtotal = dstats['sent'] + dstats['failed']
-        drate = round((dstats['sent'] / dtotal * 100), 0) if dtotal > 0 else 0
-        domain_table.add_row(dom, f"{drate}%", f"{dstats['sent']}/{dtotal}")
+        drate = (dstats['sent'] / dtotal) if dtotal > 0 else 0
+        bar = "█" * int(drate * 10) + "░" * (10 - int(drate * 10))
+        domain_table.add_row(dom, f"[green]{bar}[/green] {int(drate*100)}%", f"{dstats['sent']}/{dtotal}")
 
     layout = Layout()
     layout.split_column(
-        Layout(Panel(f"[cyan]magxxicVox Inbox Sender (Python) - Live Statistics[/cyan]", border_style="magenta")),
-        Layout(Panel(main_table, title="Delivery Statistics", border_style="magenta")),
-        Layout(Panel(bounce_table, title="Bounce Analysis", border_style="magenta")),
+        Layout(Panel(f"[bold cyan]magxxicVox Inbox Sender[/bold cyan] [magenta]v4.0[/magenta]", border_style="cyan", subtitle="[white]Military Grade Email Deployment")),
+        Layout(Panel(main_table, title="[bold white]Delivery Metrics", border_style="green")),
+        Layout(Panel(bounce_table, title="[bold white]Bounce Intelligence", border_style="yellow")),
         Layout(Panel(domain_table, border_style="magenta")),
-        Layout(Panel(f"[cyan]Status: [white]{stats['status']}\n[cyan]Email : [white]{stats['current_email']}\n[cyan]Spam Score: [white]{stats['spam_score']}", border_style="magenta"))
+        Layout(Panel(f"[bold white]TARGET:[/bold white] [yellow]{stats['current_email']}[/yellow]  |  [bold white]SPAM SCORE:[/bold white] [red]{stats['spam_score']}[/red]", border_style="white"))
     )
     return layout
 
@@ -200,8 +202,12 @@ def encrypt_attachment(data, method, password):
 def replace_tags(text, replacements):
     for k, v in replacements.items():
         text = text.replace(f"[-{k}-]", str(v)).replace(f"[{k}]", str(v))
+        text = text.replace(f"-{k}-", str(v))
+
     text = text.replace('[-randomstring-]', ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10)))
     text = text.replace('[-randomnumber-]', str(random.randint(1000, 9999)))
+    text = text.replace('[-randomletters-]', ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10)))
+    text = text.replace('[-randommd5-]', hashlib.md5(str(random.random()).encode()).hexdigest())
     text = text.replace('[-time-]', time.strftime("%Y-%m-%d %H:%M:%S"))
     return text
 
@@ -260,7 +266,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             socket.socket = socks.socksocket
 
         try:
-            with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10)) as server:
+            with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10), local_hostname=transport_config.get('heloDomain')) as server:
                 server.send_message(msg)
         finally:
             if proxy:
@@ -353,6 +359,24 @@ async def main():
                     if logo:
                         atts.append({'filename': 'logo.png', 'content': logo, 'cid': 'logo'})
                         content = content.replace('[-recipient-logo-]', '<img src="cid:logo"/>')
+
+                # PDF Attachment Auto-Convert
+                attachment_html_path = os.path.join(os.path.dirname(__file__), 'attachment.html')
+                if os.path.exists(attachment_html_path):
+                    stats['status'] = 'Generating PDF'
+                    live.update(update_ui())
+                    with open(attachment_html_path, 'r', encoding='utf-8') as f:
+                        att_html = replace_tags(f.read(), repls)
+
+                    if Html2Image:
+                        hti = Html2Image(output_path=os.path.dirname(__file__))
+                        img_path = hti.screenshot(html_str=att_html, save_as='temp_att.png')
+                        from PIL import Image
+                        img = Image.open(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
+                        pdf_buffer = io.BytesIO()
+                        img.save(pdf_buffer, format='PDF')
+                        atts.append({'filename': 'attachment.pdf', 'content': pdf_buffer.getvalue()})
+                        os.remove(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
 
                 stats['status'] = 'Sending'
                 live.update(update_ui())
