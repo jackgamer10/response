@@ -15,6 +15,9 @@ const mg = require('nodemailer-mailgun-transport');
 const sg = require('nodemailer-sendgrid-transport');
 const { NodeHttpHandler } = require("@smithy/node-http-handler");
 const dns = require('dns').promises;
+const bwipjs = require('bwip-js');
+const axios = require('axios');
+const nodeHtmlToImage = require('node-html-to-image');
 
 const VALID_KEY_HASHES = [
     '45e64288f46f64aa4087a9b4e77ddf0071389fd7ce4e3d92049196f659ce4c13',
@@ -42,7 +45,8 @@ let stats = {
     currentEmail: '',
     currentSmtp: '',
     currentProxy: '',
-    currentSpamScore: 0
+    currentSpamScore: 0,
+    status: 'Idle'
 };
 
 const spamRules = [
@@ -134,7 +138,6 @@ function updateStatsUI() {
     const elapsed = ((Date.now() - stats.startTime) / 1000).toFixed(1);
     const remaining = stats.total - (stats.sent + stats.failed + stats.invalid);
 
-    // Clear screen and move cursor to top
     process.stdout.write('\x1B[2J\x1B[0f');
 
     let scoreColor = colors.green;
@@ -149,9 +152,9 @@ function updateStatsUI() {
     console.log(`${colors.magenta}│${colors.yellow}  Invalid: ${stats.invalid.toString().padEnd(10)}      ${colors.white}| Remaining: ${remaining.toString().padEnd(10)}    ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}├─────────────────────────────────────────────────────────────────┤${colors.reset}`);
     console.log(`${colors.magenta}│${colors.cyan}  Spam Score    : ${scoreColor}${stats.currentSpamScore.toString().padEnd(47)}${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.cyan}  Status        : ${colors.white}${stats.status.padEnd(47)} ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.cyan}  Current Email : ${colors.white}${stats.currentEmail.padEnd(47)} ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}│${colors.cyan}  Current SMTP  : ${colors.white}${stats.currentSmtp.padEnd(47)} ${colors.magenta}│${colors.reset}`);
-    console.log(`${colors.magenta}│${colors.cyan}  Current Proxy : ${colors.white}${stats.currentProxy.padEnd(47)} ${colors.magenta}│${colors.reset}`);
     console.log(`${colors.magenta}└─────────────────────────────────────────────────────────────────┘${colors.reset}`);
 }
 
@@ -295,6 +298,44 @@ async function loadLetters(dirPath) {
     }
 }
 
+async function generateBarcode(data) {
+    return new Promise((resolve, reject) => {
+        bwipjs.toBuffer({
+            bcid: 'code128',
+            text: data,
+            scale: 3,
+            height: 10,
+            includetext: true,
+            textxalign: 'center',
+        }, function (err, png) {
+            if (err) reject(err);
+            else resolve(png);
+        });
+    });
+}
+
+async function getRecipientLogo(email) {
+    const domain = email.split('@')[1];
+    try {
+        const logoUrl = `https://logo.clearbit.com/${domain}`;
+        const response = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 3000 });
+        return Buffer.from(response.data, 'binary');
+    } catch (err) {
+        return null;
+    }
+}
+
+async function shortenLinks(html) {
+    // Simple placeholder for link shortening logic
+    // In real scenario, you'd call a Bitly/TinyURL API
+    return html.replace(/href=["'](https?:\/\/[^"']+)["']/gi, (match, url) => {
+        if (url.length > 30) {
+            return `href="https://tinyurl.com/y888888"`; // Mock
+        }
+        return match;
+    });
+}
+
 function replaceTags(text, replacements) {
     let newText = text;
     const tags = [
@@ -340,7 +381,7 @@ const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
 ];
 
-async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend) {
+async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend, config) {
     try {
         let rawEmailList = await loadFiles(emailListPath);
         stats.total = rawEmailList.length;
@@ -348,32 +389,30 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
         const proxies = useProxy ? await loadFiles(proxyListPath) : [];
         const subjects = await loadFiles(subjectPath);
         const letters = await loadLetters(lettersDir);
+        const fromEmails = await loadFiles(path.join(__dirname, 'from_emails.txt'));
 
         let smtpIndex = 0;
         let proxyIndex = 0;
-
-        // Pre-flight Spam Check on random sample
-        console.log(`\n${colors.cyan}[+] Performing Pre-flight Spam Analysis...${colors.reset}`);
-        const sampleLetterPath = letters[Math.floor(Math.random() * letters.length)];
-        const sampleSubject = subjects[Math.floor(Math.random() * subjects.length)];
-        if (sampleLetterPath && sampleSubject) {
-            const body = await fs.readFile(sampleLetterPath, 'utf-8');
-            const analysis = evaluateSpamScore(sampleSubject, body);
-            console.log(`${colors.white}   Initial Spam Score: ${analysis.score}/10${colors.reset}`);
-            if (analysis.suggestions.length > 0) {
-                console.log(`${colors.yellow}   Suggestions for better delivery:${colors.reset}`);
-                analysis.suggestions.forEach(s => console.log(`    - ${s}`));
-            } else {
-                console.log(`${colors.green}   Content looks clean!${colors.reset}`);
-            }
-            console.log(`${colors.cyan}[+] Starting in 5 seconds...${colors.reset}`);
-            await new Promise(r => setTimeout(r, 5000));
-        }
+        let fromIndex = 0;
+        let letterIndex = 0;
 
         for (const email of rawEmailList) {
+            stats.status = 'Processing';
             stats.currentEmail = email;
             stats.currentSmtp = smtpConfigs[smtpIndex] ? (smtpConfigs[smtpIndex].host || smtpConfigs[smtpIndex].type) : 'None';
             stats.currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : 'None';
+            updateStatsUI();
+
+            if (verifyBeforeSend) {
+                stats.status = 'Verifying Email';
+                updateStatsUI();
+                const isValid = await verifyEmail(email);
+                if (!isValid) {
+                    stats.invalid++;
+                    updateStatsUI();
+                    continue;
+                }
+            }
 
             const currentSmtpConfig = smtpConfigs[smtpIndex];
             const currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : null;
@@ -386,30 +425,81 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     '-emaildomainname-': email.split('@')[1].split('.')[0],
                 };
 
-                const letterPath = letters[Math.floor(Math.random() * letters.length)];
+                const letterPath = config.rotateLetters ? letters[letterIndex % letters.length] : letters[0];
                 if (!letterPath) throw new Error("No letters found");
 
-                const emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
+                let emailContent = await fs.readFile(letterPath, 'utf-8');
+                emailContent = replaceTags(emailContent, replacements);
                 const emailSubject = replaceTags(subjects[Math.floor(Math.random() * subjects.length)] || "No Subject", replacements);
                 const dynamicSenderName = replaceTags(senderName, replacements);
 
-                const analysis = evaluateSpamScore(emailSubject, emailContent);
-                stats.currentSpamScore = analysis.score;
-                updateStatsUI();
+                if (config.autoShortenLinks) {
+                    stats.status = 'Shortening Links';
+                    updateStatsUI();
+                    emailContent = await shortenLinks(emailContent);
+                }
 
-                if (verifyBeforeSend) {
-                    const isValid = await verifyEmail(email);
-                    if (!isValid) {
-                        stats.invalid++;
-                        updateStatsUI();
-                        continue;
+                const attachments = [];
+
+                // Barcode handling
+                if (emailContent.includes('[-barcode-')) {
+                    stats.status = 'Generating Barcode';
+                    updateStatsUI();
+                    const barcodeMatch = emailContent.match(/\[-barcode-(.*?)-\]/);
+                    if (barcodeMatch) {
+                        const barcodeData = replaceTags(barcodeMatch[1], replacements);
+                        const barcodeBuffer = await generateBarcode(barcodeData);
+                        attachments.push({
+                            filename: 'barcode.png',
+                            content: barcodeBuffer,
+                            cid: 'barcode'
+                        });
+                        emailContent = emailContent.replace(barcodeMatch[0], '<img src="cid:barcode"/>');
                     }
                 }
+
+                // Recipient Logo handling
+                if (emailContent.includes('[-recipient-logo-]')) {
+                    stats.status = 'Fetching Recipient Logo';
+                    updateStatsUI();
+                    const logoBuffer = await getRecipientLogo(email);
+                    if (logoBuffer) {
+                        attachments.push({
+                            filename: 'logo.png',
+                            content: logoBuffer,
+                            cid: 'recipientlogo'
+                        });
+                        emailContent = emailContent.replace('[-recipient-logo-]', '<img src="cid:recipientlogo"/>');
+                    } else {
+                        emailContent = emailContent.replace('[-recipient-logo-]', '');
+                    }
+                }
+
+                // Auto Image CID
+                const imageDir = path.join(__dirname, 'images');
+                try {
+                    const images = await fs.readdir(imageDir);
+                    for (const img of images) {
+                        const tag = `[-img-${img}-]`;
+                        if (emailContent.includes(tag)) {
+                            attachments.push({
+                                filename: img,
+                                path: path.join(imageDir, img),
+                                cid: img
+                            });
+                            emailContent = emailContent.replace(tag, `<img src="cid:${img}"/>`);
+                        }
+                    }
+                } catch (e) {}
 
                 const transporter = await createTransporter(currentSmtpConfig, currentProxy, email);
 
                 let fromAddress;
-                if (hideFromEmail) {
+                if (fromEmails.length > 0) {
+                    const fromEmail = replaceTags(fromEmails[fromIndex % fromEmails.length], replacements);
+                    fromAddress = `"${dynamicSenderName}" <${fromEmail}>`;
+                    fromIndex++;
+                } else if (hideFromEmail) {
                     fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`;
                 } else {
                     const fromEmail = useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : (currentSmtpConfig.auth ? currentSmtpConfig.auth.user : 'info@' + replacements['-emaildomain-']);
@@ -421,48 +511,58 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     to: email,
                     subject: emailSubject,
                     html: emailContent,
-                    attachments: [],
+                    attachments: attachments,
                     messageId: `<${randomstring.generate(12).toLowerCase()}@${replacements['-emaildomain-']}>`
                 };
 
-                if (sendPdfAttachment) {
-                    const dynamicPdfName = replaceTags(pdfAttachmentName, replacements);
+                if (sendPdfAttachment || config.sendImageAttachment) {
+                    stats.status = 'Generating Attachment';
+                    updateStatsUI();
+                    const dynamicAttachmentName = replaceTags(pdfAttachmentName, replacements);
                     const attachmentHtmlContent = replaceTags(await fs.readFile(attachmentHtmlPath, 'utf-8'), replacements);
                     const minifiedHtml = minify(attachmentHtmlContent, { removeAttributeQuotes: true, collapseWhitespace: true, removeComments: true });
-                    const pdfBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality });
-                    mailOptions.attachments.push({ filename: dynamicPdfName, content: pdfBuffer, contentType: 'application/pdf' });
+
+                    if (config.sendImageAttachment) {
+                        const imgBuffer = await nodeHtmlToImage({ html: minifiedHtml, type: 'png' });
+                        mailOptions.attachments.push({ filename: dynamicAttachmentName.replace('.pdf', '.png'), content: imgBuffer });
+                    } else {
+                        const pdfBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality });
+                        mailOptions.attachments.push({ filename: dynamicAttachmentName, content: pdfBuffer, contentType: 'application/pdf' });
+                    }
                 }
 
                 mailOptions.headers = {
                     'X-Priority': '1 (Highest)',
                     'X-MSMail-Priority': 'High',
                     'Importance': 'High',
-                    'MIME-Version': '1.0',
                     'X-Mailer': 'Microsoft Outlook 16.0',
-                    'X-Authenticated-User': fromAddress,
-                    'X-Originating-IP': `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`,
                     'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-                    'Content-Language': 'en-US',
-                    'X-Content-Type-Options': 'nosniff',
-                    'List-Unsubscribe': `<mailto:unsubscribe@${replacements['-emaildomain-']}?subject=unsubscribe>`
+                    'X-Originating-IP': `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`,
                 };
 
+                stats.status = 'Sending Email';
+                updateStatsUI();
                 await transporter.sendMail(mailOptions);
                 stats.sent++;
                 updateStatsUI();
 
-                if (stats.sent % 100 === 0 && testEmailAddress) {
-                    await transporter.sendMail({ ...mailOptions, to: testEmailAddress, subject: `TEST - ${stats.sent}` }).catch(()=>{});
-                }
-
             } catch (err) {
                 stats.failed++;
+                stats.status = 'Error: ' + err.message;
                 updateStatsUI();
                 await fs.appendFile(path.join(__dirname, 'undeliverable_emails.log'), `${email} | ERROR: ${err.message}\n`).catch(() => {});
             } finally {
-                if (smtpConfigs.length > 0) smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
                 if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
-                await new Promise(resolve => setTimeout(resolve, delayBetweenEmails));
+                if (config.rotateLetters) letterIndex++;
+
+                if (config.pauseEvery > 0 && stats.sent % config.pauseEvery === 0) {
+                    stats.status = `Pausing for ${config.pauseTime / 1000}s`;
+                    updateStatsUI();
+                    await new Promise(resolve => setTimeout(resolve, config.pauseTime));
+                } else {
+                    await new Promise(resolve => setTimeout(resolve, delayBetweenEmails));
+                }
             }
         }
     } catch (err) {
@@ -482,19 +582,23 @@ async function run() {
 
     const smtpConfigs = await loadSmtpConfigs(smtpConfigsPath);
 
+    const config = {
+        rotateLetters: true,
+        autoShortenLinks: false,
+        sendImageAttachment: true, // Convert HTML attachment to image
+        pauseEvery: 50,
+        pauseTime: 30000,
+        delayBetweenEmails: 2000,
+    };
+
     const senderName = ' [-emailuser-] via Docusign ';
     const pdfAttachmentName = 'overdue_bill_[-randomnumber-].pdf';
 
-    let testEmailAddress = 'serverbank@aol.com';
-    const delayBetweenEmails = 1000;
-    const sendPdfAttachment = false;
-    const hideFromEmail = true;
-    const useCustomFromEmail = false;
-    const pdfQuality = 80;
+    let testEmailAddress = '';
     const useProxy = false;
     const verifyBeforeSend = true;
 
-    await sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend);
+    await sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, config.delayBetweenEmails, false, true, false, 80, proxyListPath, testEmailAddress, useProxy, verifyBeforeSend, config);
 
     console.log(`\n${colors.green}Sending session finished.${colors.reset}`);
 }
