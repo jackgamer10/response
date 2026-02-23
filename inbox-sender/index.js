@@ -96,13 +96,33 @@ async function checkLicense() {
     }
 }
 
+// --- DKIM Helper ---
+async function loadDkimConfig() {
+    const dkimPath = path.join(__dirname, 'dkim.sys');
+    const keyPath = path.join(__dirname, 'dkim_key.pem');
+    try {
+        const raw = await fs.readFile(dkimPath, 'utf-8');
+        const config = obf.decode(raw);
+        const privateKey = await fs.readFile(keyPath, 'utf-8');
+        return {
+            domainName: config.domainName,
+            keySelector: config.keySelector,
+            privateKey: privateKey
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
 // --- SMTP Checker ---
-async function checkSmtpConfigs(configs) {
+async function checkSmtpConfigs(configs, dkimOptions = null) {
     console.log(`${colors.cyan}[+] Checking SMTP configurations...${colors.reset}`);
     const liveConfigs = [];
     for (const config of configs) {
         try {
-            const transporter = nodemailer.createTransport(config);
+            const transportOptions = { ...config };
+            if (dkimOptions) transportOptions.dkim = dkimOptions;
+            const transporter = nodemailer.createTransport(transportOptions);
             await transporter.verify();
             liveConfigs.push(config);
             console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
@@ -227,7 +247,7 @@ async function verifyEmail(email) {
     return mx !== null;
 }
 
-async function createTransporter(config, proxy, recipientEmail = null) {
+async function createTransporter(config, proxy, recipientEmail = null, dkimOptions = null) {
     let transport;
     let proxyUrl = proxy;
     if (config.type === 'aws') {
@@ -247,6 +267,10 @@ async function createTransporter(config, proxy, recipientEmail = null) {
         if (!mxHost) throw new Error(`No MX for ${recipientEmail}`);
         transport = { host: mxHost, port: 25, secure: false, tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' } };
     } else { transport = { ...config }; }
+
+    if (dkimOptions && transport) {
+        transport.dkim = dkimOptions;
+    }
 
     if (proxyUrl && transport && !['aws', 'sendgrid', 'mailgun'].includes(config.type)) {
         transport.createConnection = (options, callback) => {
@@ -396,7 +420,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     else { emailContent = emailContent.replace('[-recipient-logo-]', ''); }
                 }
 
-                const transporter = await createTransporter(currentSmtpConfig, currentProxy, email);
+                const transporter = await createTransporter(currentSmtpConfig, currentProxy, email, config.useDKIM ? config.dkimOptions : null);
                 let fromAddress;
                 if (fromEmails.length > 0) { fromAddress = `"${dynamicSenderName}" <${replaceTags(fromEmails[fromIndex % fromEmails.length], replacements)}>`; fromIndex++; }
                 else if (hideFromEmail) { fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`; }
@@ -419,6 +443,14 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                         contentBuffer = await encryptBuffer(contentBuffer, config.encryptionMethod, config.encryptionPassword || 'secret');
                     }
                     mailOptions.attachments.push({ filename: config.encryptionMethod === 'ZIP' ? dynamicName + '.zip' : dynamicName, content: contentBuffer });
+
+                    if (config.signAttachment) {
+                        const signature = crypto.createHash('sha256').update(contentBuffer).digest('hex');
+                        mailOptions.attachments.push({
+                            filename: (config.encryptionMethod === 'ZIP' ? dynamicName + '.zip' : dynamicName) + '.sig',
+                            content: `Signature (SHA256): ${signature}\nVerified by magxxicVox Security`,
+                        });
+                    }
                 }
 
                 stats.status = 'Sending Email'; updateStatsUI();
@@ -434,7 +466,9 @@ async function run() {
     await checkLicense();
     await printLines();
 
-    const smtpConfigs = await checkSmtpConfigs(await loadSmtpConfigs(path.join(__dirname, 'smtp.txt')));
+    const dkimOptions = await loadDkimConfig();
+
+    const smtpConfigs = await checkSmtpConfigs(await loadSmtpConfigs(path.join(__dirname, 'smtp.txt')), dkimOptions);
     if (smtpConfigs.length === 0) { console.error(`${colors.red}[!] No live SMTPs found!${colors.reset}`); process.exit(1); }
 
     const config = {
@@ -443,7 +477,10 @@ async function run() {
         sendImageAttachment: true,
         pauseEvery: 50, pauseTime: 30000, delayBetweenEmails: 2000,
         encryptionMethod: 'ZIP', // Options: 'None', 'AES-256-CBC', 'ZIP'
-        encryptionPassword: 'military_grade_password'
+        encryptionPassword: 'military_grade_password',
+        useDKIM: dkimOptions !== null,
+        dkimOptions: dkimOptions,
+        signAttachment: true
     };
 
     await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, false, true, false, 80, path.join(__dirname, 'proxies.txt'), '', false, true, config);
