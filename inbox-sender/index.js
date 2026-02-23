@@ -189,7 +189,8 @@ let stats = {
         soft: 0,
         spam: 0
     },
-    domains: {} // { domain: { sent: 0, failed: 0 } }
+    domains: {}, // { domain: { sent: 0, failed: 0 } }
+    dnsVerified: false
 };
 
 const spamRules = [
@@ -251,6 +252,8 @@ function updateStatsUI() {
     console.log(`${colors.cyan}║${colors.white}  DELIVERED   ${colors.cyan}║ ${colors.green}${stats.sent.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}STATUS: ${stats.status.padEnd(12)} ${colors.cyan}║${colors.reset}`);
     console.log(`${colors.cyan}║${colors.white}  FAILED      ${colors.cyan}║ ${colors.red}${stats.failed.toString().padEnd(20)}${colors.cyan} ║ ${colors.white}TIME  : ${elapsed.toString().padEnd(10)}s ${colors.cyan}║${colors.reset}`);
     console.log(`${colors.cyan}║${colors.white}  SUCCESS RATE${colors.cyan}║ ${rateColor}${successRate.toString().padEnd(19)}%${colors.cyan} ║ ${colors.white}TOTAL : ${stats.total.toString().padEnd(12)} ${colors.cyan}║${colors.reset}`);
+    const dnsStatus = stats.dnsVerified ? `${colors.green}ENABLED` : `${colors.red}DISABLED`;
+    console.log(`${colors.cyan}║${colors.white}  DNS VERIFY  ${colors.cyan}║ ${dnsStatus.padEnd(20)}${colors.cyan} ║ ${colors.white}PROXY : ${stats.currentProxy.padEnd(12).substring(0, 12)} ${colors.cyan}║${colors.reset}`);
     console.log(`${colors.cyan}╠══════════════╩══════════════════════╩═══════════════════════════╣${colors.reset}`);
     console.log(`${colors.cyan}║${colors.magenta}  BOUNCE ANALYSIS                                                ${colors.cyan}║${colors.reset}`);
     console.log(`${colors.cyan}║${colors.white}  HARD: ${colors.red}${stats.bounces.hard.toString().padEnd(10)}${colors.white} SOFT: ${colors.yellow}${stats.bounces.soft.toString().padEnd(10)}${colors.white} SPAM: ${colors.red}${stats.bounces.spam.toString().padEnd(10)}     ${colors.cyan}║${colors.reset}`);
@@ -523,6 +526,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
     try {
         let rawEmailList = await loadFiles(emailListPath);
         stats.total = rawEmailList.length;
+        stats.dnsVerified = verifyBeforeSend;
         const proxies = useProxy ? await loadFiles(proxyListPath) : [];
         const subjects = await loadFiles(subjectPath);
         const letters = await loadLetters(lettersDir);

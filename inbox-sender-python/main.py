@@ -87,7 +87,8 @@ stats = {
     'start_time': time.time(), 'current_email': '', 'current_smtp': '',
     'status': 'Idle', 'spam_score': 0.0,
     'bounces': {'hard': 0, 'soft': 0, 'spam': 0},
-    'domains': {}
+    'domains': {},
+    'dns_verified': False
 }
 
 def update_ui():
@@ -98,6 +99,8 @@ def update_ui():
     main_table.add_row(f"[bold white]DELIVERED[/bold white]", f"[bold green]{stats['sent']}", f"[bold white]STATUS[/bold white]", f"[cyan]{stats['status']}")
     main_table.add_row(f"[bold white]FAILED[/bold white]", f"[bold red]{stats['failed']}", f"[bold white]ELAPSED[/bold white]", f"{round(time.time() - stats['start_time'], 1)}s")
     main_table.add_row(f"[bold white]SUCCESS RATE[/bold white]", f"[bold yellow]{success_rate}%", f"[bold white]TOTAL[/bold white]", f"{stats['total']}")
+    dns_status = "[bold green]ENABLED[/bold green]" if stats['dns_verified'] else "[bold red]DISABLED[/bold red]"
+    main_table.add_row(f"[bold white]DNS VERIFY[/bold white]", dns_status, f"[bold white]ELAPSED[/bold white]", f"{round(time.time() - stats['start_time'], 1)}s")
 
     bounce_table = Table(show_header=False, box=None, expand=True)
     bounce_table.add_row(f"HARD: [red]{stats['bounces']['hard']}", f"SOFT: [yellow]{stats['bounces']['soft']}", f"SPAM: [red]{stats['bounces']['spam']}")
@@ -357,6 +360,8 @@ async def main():
     proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
 
     with Live(update_ui(), refresh_per_second=4) as live:
+        from_idx = 0
+        stats['dns_verified'] = direct_mx_options.get('verifyDns', False)
         for idx, email in enumerate(email_list):
             domain = email.split('@')[1]
             if domain not in stats['domains']: stats['domains'][domain] = {'sent': 0, 'failed': 0}
@@ -419,7 +424,9 @@ async def main():
                 live.update(update_ui())
 
                 conf = configs[idx % len(configs)].copy()
-                if from_emails: conf['from_email'] = replace_tags(random.choice(from_emails), repls)
+                if from_emails:
+                    conf['from_email'] = replace_tags(from_emails[from_idx % len(from_emails)], repls)
+                    from_idx += 1
 
                 proxy = proxies[idx % len(proxies)] if proxies else None
                 send_email(conf, email, content, subject, atts, dkim_options, {**app_config, 'proxy': proxy})

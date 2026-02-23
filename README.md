@@ -42,6 +42,7 @@ When you first run the sender (`start.bat`), it will display your unique **HWID*
 All configuration files use a readable `.sys` (JSON) format.
 - `config.sys`: General settings (delays, rotations, attachment modes).
 - `smtp.txt`: List of SMTP servers in `host|port|user|pass|fromEmail` format.
+- `from_emails.txt`: List of sender email addresses (used for Direct MX and SMTP rotation).
 - `proxies.txt`: List of SOCKS5 proxies in `ip:port` or `user:pass@ip:port` format.
 - `list.txt`: Your recipient email list.
 - `subjects.txt`: Subject line rotation.
