@@ -18,11 +18,7 @@ const dns = require('dns').promises;
 const bwipjs = require('bwip-js');
 const axios = require('axios');
 const nodeHtmlToImage = require('node-html-to-image');
-
-const VALID_KEY_HASHES = [
-    '45e64288f46f64aa4087a9b4e77ddf0071389fd7ce4e3d92049196f659ce4c13',
-    '5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5', // Hash for "12345"
-];
+const si = require('systeminformation');
 
 const colors = {
     reset: "\x1b[0m",
@@ -35,6 +31,79 @@ const colors = {
     cyan: "\x1b[36m",
     white: "\x1b[37m"
 };
+
+// --- Advanced Activation and Anti-Tamper ---
+const SECRET_SALT = 'magxxicVox_Super_Secure_Salt_2024';
+
+async function getHWID() {
+    try {
+        const uuid = await si.uuid();
+        const cpu = await si.cpu();
+        const baseboard = await si.baseboard();
+
+        // Combine multiple hardware identifiers for a robust HWID
+        const raw = `${uuid.os}-${uuid.hardware}-${cpu.brand}-${baseboard.serial}`;
+        return crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
+    } catch (err) {
+        return 'UNKNOWN-HWID-' + crypto.createHash('md5').update(require('os').hostname()).digest('hex');
+    }
+}
+
+function generateToken(hwid) {
+    // This is what the admin would use
+    return crypto.createHash('sha256').update(hwid + SECRET_SALT).digest('hex').toUpperCase();
+}
+
+async function checkLicense() {
+    const activationPath = path.join(__dirname, 'activation.dat');
+    const hwid = await getHWID();
+
+    try {
+        const data = JSON.parse(await fs.readFile(activationPath, 'utf-8'));
+
+        // Anti-tamper check: Is this the same hardware?
+        if (data.hwid !== hwid) {
+            console.error(`${colors.red}[!] Anti-Tamper: Hardware mismatch detected!${colors.reset}`);
+            console.error(`${colors.red}[!] This software is locked to another machine.${colors.reset}`);
+            process.exit(1);
+        }
+
+        // Integrity check: Has the installation path changed?
+        if (data.installPath && data.installPath !== __dirname) {
+            console.warn(`${colors.yellow}[!] Warning: Installation path change detected.${colors.reset}`);
+            // We can choose to block or just warn. Let's block for strict anti-temper.
+            // console.error(`${colors.red}[!] Anti-Tamper: Execution blocked.${colors.reset}`);
+            // process.exit(1);
+        }
+
+        // Validate Token
+        const expectedToken = generateToken(hwid);
+        if (data.token !== expectedToken) {
+            throw new Error('Invalid token');
+        }
+
+        console.log(`${colors.green}[+] License activated for HWID: ${hwid.substring(0, 8)}...${colors.reset}`);
+    } catch (err) {
+        console.log(`${colors.yellow}[!] Software not activated.${colors.reset}`);
+        console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} Your HWID: ${colors.bright}${hwid}${colors.reset}${colors.cyan} │${colors.reset}`);
+        console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
+        console.log(`${colors.yellow}[?] Please send the HWID above to the administrator to get your activation token.${colors.reset}`);
+
+        const token = (await askQuestion('Enter Activation Token: ')).trim().toUpperCase();
+        const expectedToken = generateToken(hwid);
+
+        if (token === expectedToken) {
+            await fs.writeFile(activationPath, JSON.stringify({ hwid, token, installPath: __dirname }, null, 2));
+            console.log(`${colors.green}[+] Activation successful! Please restart the application.${colors.reset}`);
+            process.exit(0);
+        } else {
+            console.error(`${colors.red}[!] Invalid activation token.${colors.reset}`);
+            process.exit(1);
+        }
+    }
+}
+// --- End Activation ---
 
 let stats = {
     total: 0,
@@ -88,50 +157,15 @@ function evaluateSpamScore(subject, body) {
 }
 
 function askQuestion(query) {
-    console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: `${colors.cyan}│ ${colors.reset}${query}`
     });
 
-    rl.prompt();
-
-    return new Promise(resolve => rl.on('line', (line) => {
+    return new Promise(resolve => rl.question(query, (answer) => {
         rl.close();
-        console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
-        resolve(line);
+        resolve(answer);
     }));
-}
-
-async function checkLicense() {
-    const licensePath = path.join(__dirname, 'license.key');
-    try {
-        const key = await fs.readFile(licensePath, 'utf-8');
-        const keyHash = crypto.createHash('sha256').update(key.trim()).digest('hex');
-
-        if (!VALID_KEY_HASHES.includes(keyHash)) {
-            throw new Error('Invalid license key.');
-        }
-        console.log(`${colors.green}License key validated.${colors.reset}`);
-    } catch (err) {
-        if (err.code === 'ENOENT' || err.message === 'Invalid license key.') {
-            console.log(`${colors.yellow}License key invalid or not found.${colors.reset}`);
-            const enteredKey = await askQuestion('Please enter your license key: ');
-            const enteredKeyHash = crypto.createHash('sha256').update(enteredKey.trim()).digest('hex');
-
-            if (VALID_KEY_HASHES.includes(enteredKeyHash)) {
-                console.log(`${colors.green}License key is valid. Saving for future use.${colors.reset}`);
-                await fs.writeFile(licensePath, enteredKey.trim());
-            } else {
-                console.error(`${colors.red}Error: The license key you entered is invalid.${colors.reset}`);
-                process.exit(1);
-            }
-        } else {
-            console.error(`${colors.red}Error: ${err.message}${colors.reset}`);
-            process.exit(1);
-        }
-    }
 }
 
 function updateStatsUI() {
@@ -326,11 +360,9 @@ async function getRecipientLogo(email) {
 }
 
 async function shortenLinks(html) {
-    // Simple placeholder for link shortening logic
-    // In real scenario, you'd call a Bitly/TinyURL API
     return html.replace(/href=["'](https?:\/\/[^"']+)["']/gi, (match, url) => {
         if (url.length > 30) {
-            return `href="https://tinyurl.com/y888888"`; // Mock
+            return `href="https://tinyurl.com/y888888"`;
         }
         return match;
     });
@@ -441,7 +473,6 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
                 const attachments = [];
 
-                // Barcode handling
                 if (emailContent.includes('[-barcode-')) {
                     stats.status = 'Generating Barcode';
                     updateStatsUI();
@@ -458,7 +489,6 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     }
                 }
 
-                // Recipient Logo handling
                 if (emailContent.includes('[-recipient-logo-]')) {
                     stats.status = 'Fetching Recipient Logo';
                     updateStatsUI();
@@ -475,7 +505,6 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     }
                 }
 
-                // Auto Image CID
                 const imageDir = path.join(__dirname, 'images');
                 try {
                     const images = await fs.readdir(imageDir);
@@ -585,7 +614,7 @@ async function run() {
     const config = {
         rotateLetters: true,
         autoShortenLinks: false,
-        sendImageAttachment: true, // Convert HTML attachment to image
+        sendImageAttachment: true,
         pauseEvery: 50,
         pauseTime: 30000,
         delayBetweenEmails: 2000,
