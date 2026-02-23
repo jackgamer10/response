@@ -1,0 +1,11 @@
+rich
+requests
+boto3
+dnspython
+dkimpy
+pycryptodome
+python-barcode
+html2image
+psutil
+PySocks
+Pillow
