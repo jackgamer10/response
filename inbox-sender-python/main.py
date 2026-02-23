@@ -1,6 +1,9 @@
 import os
 import sys
 import time
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 import random
 import json
 import base64

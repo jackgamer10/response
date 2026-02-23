@@ -1,5 +1,7 @@
 'use strict';
 
+process.noDeprecation = true;
+
 const nodemailer = require('nodemailer');
 const fs = require('fs').promises;
 const path = require('path');

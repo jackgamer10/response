@@ -1,5 +1,7 @@
 'use strict';
 
+process.noDeprecation = true;
+
 const crypto = require('crypto');
 const fs = require('fs');
 const readline = require('readline');
