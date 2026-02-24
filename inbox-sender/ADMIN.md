@@ -72,4 +72,4 @@ const brevoConfig = {
 ## Anti-Tamper Notes
 - The activation is locked to the specific hardware identifiers (CPU, UUID, Baseboard).
 - If the user moves the files to another machine, they will be prompted for a new activation.
-- The `activation.dat` file stores the paired HWID and Token.
+- The `activation.sys` file stores the paired HWID and Token.

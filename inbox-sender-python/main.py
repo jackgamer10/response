@@ -198,24 +198,27 @@ def load_direct_mx_config():
     cfg_path = os.path.join(os.path.dirname(__file__), 'direct_mx_config.sys')
     set_path = os.path.join(os.path.dirname(__file__), 'direct_mx_settings.sys')
     try:
-        res = {'retries': 3, 'timeout': 10000, 'verifyDns': True, 'heloDomain': 'localhost'}
+        res = {'retries': 3, 'timeout': 30000, 'verifyDns': True, 'heloDomain': 'localhost'}
         if os.path.exists(cfg_path):
             with open(cfg_path, 'r') as f: res.update(decode_obf(f.read()))
         if os.path.exists(set_path):
             with open(set_path, 'r') as f: res.update(decode_obf(f.read()))
         return res
-    except Exception: return {'retries': 3, 'timeout': 10000, 'verifyDns': True, 'heloDomain': 'localhost'}
+    except Exception: return {'retries': 3, 'timeout': 30000, 'verifyDns': True, 'heloDomain': 'localhost'}
 
 def load_app_config():
     path = os.path.join(os.path.dirname(__file__), 'config.sys')
     try:
         if os.path.exists(path):
-            with open(path, 'r') as f: return decode_obf(f.read())
+            config = decode_obf(open(path, 'r').read())
+            if 'skipSmtpCheck' not in config: config['skipSmtpCheck'] = False
+            return config
     except Exception: pass
     return {
         'rotateLetters': True, 'autoShortenLinks': False, 'sendImageAttachment': True,
         'delayBetweenEmails': 2000, 'pauseEvery': 50, 'pauseTime': 30000,
-        'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True
+        'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True,
+        'skipSmtpCheck': False
     }
 
 def load_dkim_config():
@@ -302,36 +305,40 @@ def replace_tags(text, replacements):
 
 # --- Transport & Sending ---
 
-def check_smtp_configs(configs, proxy=None):
+def check_smtp_configs(configs, proxies=None):
     live = []
     print(Fore.CYAN + "[+] Checking SMTP configurations...")
 
-    orig_socket = socket.socket
-    if proxy:
-        import socks
-        url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
-        socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
-        socket.socket = socks.socksocket
+    proxy_index = 0
+    max_proxy_retries = min(len(proxies), 3) if proxies else 1
 
-    try:
-        for c in configs:
+    for c in configs:
+        if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
+            print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
+            live.append(c); continue
+
+        success = False
+        last_err = ""
+        for _ in range(max_proxy_retries):
+            current_proxy = proxies[proxy_index % len(proxies)] if proxies else None
+            orig_socket = socket.socket
+            if current_proxy:
+                import socks
+                url = requests.utils.urlparse(current_proxy if '://' in current_proxy else f'socks5://{current_proxy}')
+                socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+                socket.socket = socks.socksocket
+
             try:
-                if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
-                    print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
-                    live.append(c); continue
-
                 if c.get('type') == 'brevo':
                     c['host'] = 'smtp-relay.brevo.com'
                     c['port'] = 587
                     c['pass'] = c.get('apiKey')
 
-                # Permissive SSL context
                 context = ssl._create_unverified_context()
-
                 if c['port'] == 465:
-                    server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=15, context=context)
+                    server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=20, context=context)
                 else:
-                    server = smtplib.SMTP(c['host'], c['port'], timeout=15)
+                    server = smtplib.SMTP(c['host'], c['port'], timeout=20)
                     try:
                         server.starttls(context=context)
                     except Exception: pass
@@ -340,11 +347,16 @@ def check_smtp_configs(configs, proxy=None):
                     server.login(c['user'], c['pass'])
                     live.append(c)
                     print(Fore.GREEN + f"  [LIVE] {c['host']}")
+                    success = True
+                    break
             except Exception as e:
-                print(Fore.RED + f"  [DEAD] {c.get('host', 'API')}: {str(e)[:30]}")
-    finally:
-        if proxy:
-            socket.socket = orig_socket
+                last_err = str(e)[:50]
+                proxy_index += 1 # Try next proxy for this SMTP
+            finally:
+                socket.socket = orig_socket
+
+        if not success:
+            print(Fore.RED + f"  [DEAD] {c.get('host', 'API')}: {last_err}")
 
     return live
 
@@ -508,10 +520,11 @@ def show_settings_dashboard(app_config, direct_mx_options):
         table.add_row("6. HELO Domain", direct_mx_options.get('heloDomain', 'localhost'), "HELO/EHLO hostname for SMTP")
         table.add_row("7. DNS Verify", "ENABLED" if direct_mx_options.get('verifyDns') else "DISABLED", "Deep check recipient MX before sending")
         table.add_row("8. SMTP Timeout", str(direct_mx_options.get('timeout', 10000)), "Connection timeout in ms")
-        table.add_row("9. SAVE & EXIT", "", "Apply changes and return to main menu")
+        table.add_row("9. Skip SMTP Check", "YES" if app_config.get('skipSmtpCheck') else "NO", "Bypass initial SMTP availability check")
+        table.add_row("0. SAVE & EXIT", "", "Apply changes and return to main menu")
 
         console.print(table)
-        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (1-9): ").strip()
+        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9): ").strip()
 
         if choice == '1':
             val = input("Enter new delay (ms): ")
@@ -530,7 +543,8 @@ def show_settings_dashboard(app_config, direct_mx_options):
         elif choice == '8':
             val = input("Enter timeout (ms): ")
             if val.isdigit(): direct_mx_options['timeout'] = int(val)
-        elif choice == '9':
+        elif choice == '9': app_config['skipSmtpCheck'] = not app_config.get('skipSmtpCheck', False)
+        elif choice == '0':
             # Save to files
             with open(os.path.join(os.path.dirname(__file__), 'config.sys'), 'w') as f: f.write(encode_obf(app_config))
             with open(os.path.join(os.path.dirname(__file__), 'direct_mx_config.sys'), 'w') as f: f.write(encode_obf(direct_mx_options))
@@ -622,9 +636,8 @@ async def main():
             print(Fore.RED + "[!] No live proxies found for Direct MX!")
             return
 
-    if mode != '3':
-        check_proxy = proxies[0] if proxies else None
-        configs = check_smtp_configs(configs, check_proxy)
+    if mode != '3' and not app_config.get('skipSmtpCheck'):
+        configs = check_smtp_configs(configs, proxies if proxies else None)
     if not configs: print("No live configurations!"); return
 
     email_list = load_files(os.path.join(os.path.dirname(__file__), 'list.txt'))

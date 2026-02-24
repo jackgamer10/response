@@ -130,25 +130,40 @@ async function loadDkimConfig() {
 }
 
 // --- SMTP Checker ---
-async function checkSmtpConfigs(configs, dkimOptions = null, proxy = null) {
+async function checkSmtpConfigs(configs, dkimOptions = null, proxies = null, directMxOptions = null) {
     console.log(`${colors.cyan}[+] Checking SMTP/API configurations...${colors.reset}`);
     const liveConfigs = [];
-    for (const config of configs) {
-        try {
-            if (['aws', 'mailgun', 'sendgrid'].includes(config.type)) {
-                console.log(`${colors.yellow}  [SKIP] Verification skipped for API type: ${config.type}${colors.reset}`);
-                liveConfigs.push(config);
-                continue;
-            }
+    let proxyIndex = 0;
+    const maxProxyRetries = (proxies && proxies.length > 0) ? Math.min(proxies.length, 3) : 1;
 
-            const transporter = await createTransporter(config, proxy, null, dkimOptions);
-            if (typeof transporter.verify === 'function') {
-                await transporter.verify();
-            }
+    for (const config of configs) {
+        if (['aws', 'mailgun', 'sendgrid'].includes(config.type)) {
+            console.log(`${colors.yellow}  [SKIP] Verification skipped for API type: ${config.type}${colors.reset}`);
             liveConfigs.push(config);
-            console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
-        } catch (err) {
-            console.log(`${colors.red}  [DEAD] ${config.host || config.type}: ${err.message}${colors.reset}`);
+            continue;
+        }
+
+        let success = false;
+        let lastErr = "";
+        for (let i = 0; i < maxProxyRetries; i++) {
+            const currentProxy = (proxies && proxies.length > 0) ? proxies[proxyIndex % proxies.length] : null;
+            try {
+                const transporter = await createTransporter(config, currentProxy, null, dkimOptions, directMxOptions);
+                if (typeof transporter.verify === 'function') {
+                    await transporter.verify();
+                }
+                liveConfigs.push(config);
+                console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
+                success = true;
+                break;
+            } catch (err) {
+                lastErr = err.message;
+                proxyIndex++;
+            }
+        }
+
+        if (!success) {
+            console.log(`${colors.red}  [DEAD] ${config.host || config.type}: ${lastErr}${colors.reset}`);
         }
     }
     return liveConfigs;
@@ -410,19 +425,22 @@ async function loadDirectMxConfig() {
         const settingsRaw = await fs.readFile(path.join(__dirname, 'direct_mx_settings.sys'), 'utf-8');
         return { ...obf.decode(configRaw), ...obf.decode(settingsRaw) };
     } catch (e) {
-        return { retries: 3, timeout: 10000, verifyDns: true, heloDomain: 'localhost' };
+        return { retries: 3, timeout: 30000, verifyDns: true, heloDomain: 'localhost' };
     }
 }
 
 async function loadAppConfig() {
     try {
         const raw = await fs.readFile(path.join(__dirname, 'config.sys'), 'utf-8');
-        return obf.decode(raw);
+        const config = obf.decode(raw);
+        if (config.skipSmtpCheck === undefined) config.skipSmtpCheck = false;
+        return config;
     } catch (e) {
         return {
             rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
             delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
-            encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true
+            encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true,
+            skipSmtpCheck: false
         };
     }
 }
@@ -525,10 +543,11 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
         console.log(`${colors.cyan}│${colors.white} 6. HELO Domain:     ${colors.yellow}${directMxOptions.heloDomain.padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 7. DNS Verify:      ${colors.yellow}${(directMxOptions.verifyDns ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 8. SMTP Timeout:    ${colors.yellow}${directMxOptions.timeout.toString().padEnd(30)}${colors.cyan}│${colors.reset}`);
-        console.log(`${colors.cyan}│${colors.white} 9. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 9. Skip SMTP Check: ${colors.yellow}${(appConfig.skipSmtpCheck ? "YES" : "NO").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 0. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
 
-        const choice = await askQuestion('\nSelect option to toggle/edit (1-9): ');
+        const choice = await askQuestion('\nSelect option to toggle/edit (0-9): ');
 
         if (choice === '1') {
             const val = await askQuestion('Enter new delay (ms): ');
@@ -552,6 +571,8 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
             const val = await askQuestion('Enter timeout (ms): ');
             if (!isNaN(parseInt(val))) directMxOptions.timeout = parseInt(val);
         } else if (choice === '9') {
+            appConfig.skipSmtpCheck = !appConfig.skipSmtpCheck;
+        } else if (choice === '0') {
             await fs.writeFile(path.join(__dirname, 'config.sys'), obf.encode(appConfig));
             const currentMxConfig = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8'));
             const currentMxSettings = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_settings.sys'), 'utf-8'));
@@ -856,9 +877,8 @@ async function run() {
         proxies = await validateProxies(proxies);
     }
 
-    if (method !== '3') {
-        const checkProxy = (proxies && proxies.length > 0) ? proxies[0] : null;
-        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions, checkProxy);
+    if (method !== '3' && !appConfig.skipSmtpCheck) {
+        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions, proxies, directMxOptions);
     }
 
     if (smtpConfigs.length === 0) {
