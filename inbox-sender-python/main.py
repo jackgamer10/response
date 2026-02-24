@@ -302,34 +302,50 @@ def replace_tags(text, replacements):
 
 # --- Transport & Sending ---
 
-def check_smtp_configs(configs):
+def check_smtp_configs(configs, proxy=None):
     live = []
     print(Fore.CYAN + "[+] Checking SMTP configurations...")
-    for c in configs:
-        try:
-            if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
-                print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
-                live.append(c); continue
 
-            if c.get('type') == 'brevo':
-                c['host'] = 'smtp-relay.brevo.com'
-                c['port'] = 587
-                c['pass'] = c.get('apiKey')
+    orig_socket = socket.socket
+    if proxy:
+        import socks
+        url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+        socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
+        socket.socket = socks.socksocket
 
-            if c['port'] == 465:
-                server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=10)
-            else:
-                server = smtplib.SMTP(c['host'], c['port'], timeout=10)
-                try:
-                    server.starttls()
-                except Exception: pass
+    try:
+        for c in configs:
+            try:
+                if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
+                    print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
+                    live.append(c); continue
 
-            with server:
-                server.login(c['user'], c['pass'])
-                live.append(c)
-                print(Fore.GREEN + f"  [LIVE] {c['host']}")
-        except Exception as e:
-            print(Fore.RED + f"  [DEAD] {c.get('host', 'API')}: {str(e)[:30]}")
+                if c.get('type') == 'brevo':
+                    c['host'] = 'smtp-relay.brevo.com'
+                    c['port'] = 587
+                    c['pass'] = c.get('apiKey')
+
+                # Permissive SSL context
+                context = ssl._create_unverified_context()
+
+                if c['port'] == 465:
+                    server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=15, context=context)
+                else:
+                    server = smtplib.SMTP(c['host'], c['port'], timeout=15)
+                    try:
+                        server.starttls(context=context)
+                    except Exception: pass
+
+                with server:
+                    server.login(c['user'], c['pass'])
+                    live.append(c)
+                    print(Fore.GREEN + f"  [LIVE] {c['host']}")
+            except Exception as e:
+                print(Fore.RED + f"  [DEAD] {c.get('host', 'API')}: {str(e)[:30]}")
+    finally:
+        if proxy:
+            socket.socket = orig_socket
+
     return live
 
 def send_email(transport_config, email, content, subject, attachments, dkim_options, config):
@@ -356,6 +372,10 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
     if dkim_options:
         sig = dkim.sign(msg.as_bytes(), dkim_options['keySelector'].encode(), dkim_options['domainName'].encode(), dkim_options['privateKey'].encode())
         msg['DKIM-Signature'] = sig.decode().split('DKIM-Signature: ')[1]
+
+    # Robust timeout conversion (ms to s)
+    raw_timeout = transport_config.get('timeout', 10000)
+    timeout_s = raw_timeout / 1000.0 if raw_timeout > 500 else raw_timeout
 
     if transport_config.get('type') == 'aws':
         client = boto3.client('ses', region_name=transport_config['region'], aws_access_key_id=transport_config['accessKeyId'], aws_secret_access_key=transport_config['secretAccessKey'])
@@ -417,7 +437,10 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             last_err = None
             for _ in range(transport_config.get('retries', 3)):
                 try:
-                    with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10), local_hostname=transport_config.get('heloDomain')) as server:
+                    with smtplib.SMTP(mx, 25, timeout=timeout_s, local_hostname=transport_config.get('heloDomain')) as server:
+                        try:
+                            server.starttls(context=ssl._create_unverified_context())
+                        except Exception: pass
                         server.send_message(msg)
                     return
                 except Exception as e:
@@ -426,9 +449,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             if last_err: raise last_err
         finally:
             if proxy:
-                import socket
-                import importlib
-                importlib.reload(socket) # Reset socket after proxy use
+                socket.socket = orig_socket
     else: # SMTP
         if transport_config.get('type') == 'brevo':
             transport_config['host'] = 'smtp-relay.brevo.com'
@@ -448,13 +469,13 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             for _ in range(config.get('directMxOptions', {}).get('retries', 3)):
                 try:
                     helo = config.get('directMxOptions', {}).get('heloDomain', 'localhost')
+                    context = ssl._create_unverified_context()
                     if transport_config.get('port') == 465:
-                        context = ssl.create_default_context()
-                        server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10), local_hostname=helo, context=context)
+                        server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=timeout_s, local_hostname=helo, context=context)
                     else:
-                        server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10), local_hostname=helo)
+                        server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=timeout_s, local_hostname=helo)
                         try:
-                            server.starttls()
+                            server.starttls(context=context)
                         except Exception: pass
 
                     with server:
@@ -593,7 +614,17 @@ async def main():
         configs = [{'type': 'direct', **direct_mx_options}]
 
     if not configs: print("No configurations found!"); return
-    if mode != '3': configs = check_smtp_configs(configs)
+
+    proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
+    if proxies:
+        proxies = validate_proxies(proxies)
+        if not proxies and mode == '3':
+            print(Fore.RED + "[!] No live proxies found for Direct MX!")
+            return
+
+    if mode != '3':
+        check_proxy = proxies[0] if proxies else None
+        configs = check_smtp_configs(configs, check_proxy)
     if not configs: print("No live configurations!"); return
 
     email_list = load_files(os.path.join(os.path.dirname(__file__), 'list.txt'))
@@ -603,12 +634,6 @@ async def main():
     links = load_files(os.path.join(os.path.dirname(__file__), 'links.txt'))
     from_emails = load_files(os.path.join(os.path.dirname(__file__), 'from_emails.txt'))
 
-    proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
-    if proxies:
-        proxies = validate_proxies(proxies)
-        if not proxies and mode == '3':
-            print(Fore.RED + "[!] No live proxies found for Direct MX!")
-            return
 
     if mode == '3':
         check_direct_mx_connectivity(proxies[0] if proxies else None)

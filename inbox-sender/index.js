@@ -130,7 +130,7 @@ async function loadDkimConfig() {
 }
 
 // --- SMTP Checker ---
-async function checkSmtpConfigs(configs, dkimOptions = null) {
+async function checkSmtpConfigs(configs, dkimOptions = null, proxy = null) {
     console.log(`${colors.cyan}[+] Checking SMTP/API configurations...${colors.reset}`);
     const liveConfigs = [];
     for (const config of configs) {
@@ -141,15 +141,7 @@ async function checkSmtpConfigs(configs, dkimOptions = null) {
                 continue;
             }
 
-            const transportOptions = { ...config };
-            if (dkimOptions) transportOptions.dkim = dkimOptions;
-            if (config.type === 'brevo') {
-                transportOptions.host = 'smtp-relay.brevo.com';
-                transportOptions.port = 587;
-                transportOptions.auth = { user: config.user, pass: config.apiKey };
-            }
-
-            const transporter = nodemailer.createTransport(transportOptions);
+            const transporter = await createTransporter(config, proxy, null, dkimOptions);
             if (typeof transporter.verify === 'function') {
                 await transporter.verify();
             }
@@ -333,12 +325,13 @@ async function createTransporter(config, proxy, recipientEmail = null, dkimOptio
             port: 25,
             secure: false,
             name: (directMxOptions && directMxOptions.heloDomain) || 'localhost',
-            tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
+            tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
             connectionTimeout: (directMxOptions && directMxOptions.timeout) || 10000,
             greetingTimeout: (directMxOptions && directMxOptions.timeout) || 10000
         };
     } else {
         transport = { ...config };
+        transport.tls = { rejectUnauthorized: false };
         if (directMxOptions && directMxOptions.heloDomain) {
             transport.name = directMxOptions.heloDomain;
         }
@@ -858,8 +851,14 @@ async function run() {
 
     const dkimOptions = await loadDkimConfig();
 
+    let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+    if (proxies.length > 0) {
+        proxies = await validateProxies(proxies);
+    }
+
     if (method !== '3') {
-        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions);
+        const checkProxy = (proxies && proxies.length > 0) ? proxies[0] : null;
+        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions, checkProxy);
     }
 
     if (smtpConfigs.length === 0) {
@@ -886,11 +885,6 @@ async function run() {
         dkimOptions: dkimOptions,
         directMxOptions: directMxOptions
     };
-
-    let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
-    if (proxies.length > 0) {
-        proxies = await validateProxies(proxies);
-    }
 
     await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, true, true, false, 80, proxies, '', true, directMxOptions.verifyDns, config);
 }
