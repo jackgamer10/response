@@ -118,10 +118,21 @@ async function menu() {
             break;
 
         case '8':
+            const sendAttachment = (await ask('Send Attachment? (y/n): ')).toLowerCase() === 'y';
+            let attachmentType = 'None';
+            if (sendAttachment) {
+                console.log('\n  1. PDF');
+                console.log('  2. Image');
+                console.log('  3. SVG');
+                const typeChoice = await ask('Select Attachment Format (1-3): ');
+                attachmentType = typeChoice === '1' ? 'PDF' : (typeChoice === '2' ? 'Image' : 'SVG');
+            }
+
             const config = {
                 rotateLetters: (await ask('Rotate Letters? (y/n): ')).toLowerCase() === 'y',
                 autoShortenLinks: (await ask('Auto Shorten Links? (y/n): ')).toLowerCase() === 'y',
-                sendImageAttachment: (await ask('Send Image Attachment? (y/n): ')).toLowerCase() === 'y',
+                sendAttachment: sendAttachment,
+                attachmentType: attachmentType,
                 delayBetweenEmails: parseInt(await ask('Delay between emails (ms): ')) || 2000,
                 pauseEvery: parseInt(await ask('Pause every X emails: ')) || 50,
                 pauseTime: parseInt(await ask('Pause duration (ms): ')) || 30000,

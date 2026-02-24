@@ -651,26 +651,37 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     }
                 };
 
-                if (sendPdfAttachment || config.sendImageAttachment) {
+                if (config.sendAttachment) {
                     stats.status = 'Generating Attachment'; updateStatsUI();
                     const dynamicName = replaceTags(pdfAttachmentName, replacements);
                     const attachmentHtml = replaceTags(await fs.readFile(attachmentHtmlPath, 'utf-8'), replacements);
                     const minifiedHtml = minify(attachmentHtml, { removeAttributeQuotes: true, collapseWhitespace: true, removeComments: true });
 
                     let contentBuffer;
-                    if (config.sendImageAttachment) { contentBuffer = await nodeHtmlToImage({ html: minifiedHtml, type: 'png' }); }
-                    else { contentBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality }); }
+                    let extension = '';
+                    if (config.attachmentType === 'Image') {
+                        contentBuffer = await nodeHtmlToImage({ html: minifiedHtml, type: 'png' });
+                        extension = '.png';
+                    } else if (config.attachmentType === 'SVG') {
+                        contentBuffer = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">${minifiedHtml}</div></foreignObject></svg>`);
+                        extension = '.svg';
+                    } else {
+                        contentBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality });
+                        extension = '.pdf';
+                    }
+
+                    const fileName = dynamicName.split('.')[0] + extension;
 
                     if (config.encryptionMethod && config.encryptionMethod !== 'None') {
                         stats.status = `Encrypting (${config.encryptionMethod})`; updateStatsUI();
                         contentBuffer = await encryptBuffer(contentBuffer, config.encryptionMethod, config.encryptionPassword || 'secret');
                     }
-                    mailOptions.attachments.push({ filename: config.encryptionMethod === 'ZIP' ? dynamicName + '.zip' : dynamicName, content: contentBuffer });
+                    mailOptions.attachments.push({ filename: config.encryptionMethod === 'ZIP' ? fileName + '.zip' : fileName, content: contentBuffer });
 
                     if (config.signAttachment) {
                         const signature = crypto.createHash('sha256').update(contentBuffer).digest('hex');
                         mailOptions.attachments.push({
-                            filename: (config.encryptionMethod === 'ZIP' ? dynamicName + '.zip' : dynamicName) + '.sig',
+                            filename: (config.encryptionMethod === 'ZIP' ? fileName + '.zip' : fileName) + '.sig',
                             content: `Signature (SHA256): ${signature}\nVerified by magxxicVox Security`,
                         });
                     }
@@ -749,8 +760,21 @@ async function run() {
         process.exit(1);
     }
 
+    console.log(`\n${colors.cyan}Attachment Settings:${colors.reset}`);
+    const sendAtt = (await askQuestion('Send Attachment this session? (y/n): ')).toLowerCase() === 'y';
+    let attType = appConfig.attachmentType || 'PDF';
+    if (sendAtt) {
+        console.log('  1. PDF');
+        console.log('  2. Image');
+        console.log('  3. SVG');
+        const choice = await askQuestion('Select Attachment Format (1-3): ');
+        attType = choice === '1' ? 'PDF' : (choice === '2' ? 'Image' : 'SVG');
+    }
+
     const config = {
         ...appConfig,
+        sendAttachment: sendAtt,
+        attachmentType: attType,
         useDKIM: dkimOptions !== null,
         dkimOptions: dkimOptions,
         directMxOptions: directMxOptions

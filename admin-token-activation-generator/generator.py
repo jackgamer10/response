@@ -118,10 +118,20 @@ def main():
             print(f"\n{Colors.GREEN}[+] Created direct_mx_config.sys and direct_mx_settings.sys{Colors.RESET}\n")
 
         elif choice == '8':
+            send_att = ask('Send Attachment? (y/n): ').lower() == 'y'
+            att_type = 'None'
+            if send_att:
+                print('\n  1. PDF')
+                print('  2. Image')
+                print('  3. SVG')
+                type_choice = ask('Select Attachment Format (1-3): ')
+                att_type = 'PDF' if type_choice == '1' else ('Image' if type_choice == '2' else 'SVG')
+
             config = {
                 'rotateLetters': ask('Rotate Letters? (y/n): ').lower() == 'y',
                 'autoShortenLinks': ask('Auto Shorten Links? (y/n): ').lower() == 'y',
-                'sendImageAttachment': ask('Send Image Attachment? (y/n): ').lower() == 'y',
+                'sendAttachment': send_att,
+                'attachmentType': att_type,
                 'delayBetweenEmails': int(ask('Delay between emails (ms): ') or 2000),
                 'pauseEvery': int(ask('Pause every X emails: ') or 50),
                 'pauseTime': int(ask('Pause duration (ms): ') or 30000),

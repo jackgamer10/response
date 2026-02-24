@@ -447,6 +447,19 @@ async def main():
     if mode == '3':
         check_direct_mx_connectivity(proxies[0] if proxies else None)
 
+    print(Fore.CYAN + "\nAttachment Settings:")
+    send_att = input(Fore.WHITE + "Send Attachment this session? (y/n): ").lower() == 'y'
+    att_type = app_config.get('attachmentType', 'PDF')
+    if send_att:
+        print("  1. PDF")
+        print("  2. Image")
+        print("  3. SVG")
+        choice = input("Select Attachment Format (1-3): ")
+        att_type = 'PDF' if choice == '1' else ('Image' if choice == '2' else 'SVG')
+
+    app_config['sendAttachment'] = send_att
+    app_config['attachmentType'] = att_type
+
     with Live(update_ui(), refresh_per_second=4) as live:
         from_idx = 0
         stats['dns_verified'] = direct_mx_options.get('verifyDns', False)
@@ -490,23 +503,36 @@ async def main():
                         atts.append({'filename': 'logo.png', 'content': logo, 'cid': 'logo'})
                         content = content.replace('[-recipient-logo-]', '<img src="cid:logo"/>')
 
-                # PDF Attachment Auto-Convert
-                attachment_html_path = os.path.join(os.path.dirname(__file__), 'attachment.html')
-                if os.path.exists(attachment_html_path):
-                    stats['status'] = 'Generating PDF'
-                    live.update(update_ui())
-                    with open(attachment_html_path, 'r', encoding='utf-8') as f:
-                        att_html = replace_tags(f.read(), repls)
+                # Attachment Auto-Convert
+                if app_config.get('sendAttachment'):
+                    attachment_html_path = os.path.join(os.path.dirname(__file__), 'attachment.html')
+                    if os.path.exists(attachment_html_path):
+                        stats['status'] = f"Generating {app_config.get('attachmentType')}"
+                        live.update(update_ui())
+                        with open(attachment_html_path, 'r', encoding='utf-8') as f:
+                            att_html = replace_tags(f.read(), repls)
 
-                    if Html2Image:
-                        hti = Html2Image(output_path=os.path.dirname(__file__))
-                        img_path = hti.screenshot(html_str=att_html, save_as='temp_att.png')
-                        from PIL import Image
-                        img = Image.open(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
-                        pdf_buffer = io.BytesIO()
-                        img.save(pdf_buffer, format='PDF')
-                        atts.append({'filename': 'attachment.pdf', 'content': pdf_buffer.getvalue()})
-                        os.remove(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
+                        att_type = app_config.get('attachmentType', 'PDF')
+                        if att_type == 'Image':
+                            if Html2Image:
+                                hti = Html2Image(output_path=os.path.dirname(__file__))
+                                hti.screenshot(html_str=att_html, save_as='temp_att.png')
+                                with open(os.path.join(os.path.dirname(__file__), 'temp_att.png'), 'rb') as f:
+                                    atts.append({'filename': 'attachment.png', 'content': f.read()})
+                                os.remove(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
+                        elif att_type == 'SVG':
+                            svg_content = f'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">{att_html}</div></foreignObject></svg>'
+                            atts.append({'filename': 'attachment.svg', 'content': svg_content.encode('utf-8')})
+                        else: # PDF
+                            if Html2Image:
+                                hti = Html2Image(output_path=os.path.dirname(__file__))
+                                hti.screenshot(html_str=att_html, save_as='temp_att.png')
+                                from PIL import Image
+                                img = Image.open(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
+                                pdf_buffer = io.BytesIO()
+                                img.save(pdf_buffer, format='PDF')
+                                atts.append({'filename': 'attachment.pdf', 'content': pdf_buffer.getvalue()})
+                                os.remove(os.path.join(os.path.dirname(__file__), 'temp_att.png'))
 
                 stats['status'] = 'Sending'
                 live.update(update_ui())
