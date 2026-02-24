@@ -298,8 +298,16 @@ def check_smtp_configs(configs):
             if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
                 print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
                 live.append(c); continue
-            with smtplib.SMTP(c['host'], c['port'], timeout=10) as server:
-                server.starttls()
+
+            if c['port'] == 465:
+                server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=10)
+            else:
+                server = smtplib.SMTP(c['host'], c['port'], timeout=10)
+                try:
+                    server.starttls()
+                except Exception: pass
+
+            with server:
                 server.login(c['user'], c['pass'])
                 live.append(c)
                 print(Fore.GREEN + f"  [LIVE] {c['host']}")
@@ -352,6 +360,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
                 importlib.reload(socket) # Reset socket after proxy use
     else: # SMTP
         proxy = config.get('proxy')
+        orig_socket = socket.socket
         if proxy:
             import socks
             url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
@@ -359,15 +368,20 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             socket.socket = socks.socksocket
 
         try:
-            with smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10)) as server:
-                server.starttls()
+            if transport_config['port'] == 465:
+                server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
+            else:
+                server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
+                try:
+                    server.starttls()
+                except Exception: pass
+
+            with server:
                 server.login(transport_config['user'], transport_config['pass'])
                 server.send_message(msg)
         finally:
             if proxy:
-                import socket
-                import importlib
-                importlib.reload(socket)
+                socket.socket = orig_socket
 
 # --- Main Flow ---
 
@@ -391,9 +405,13 @@ async def main():
     dkim_options = load_dkim_config()
 
     if mode == '1':
+        import re
         for l in load_files(os.path.join(os.path.dirname(__file__), 'smtp.txt')):
             p = l.split('|')
-            if len(p) >= 4: configs.append({'host':p[0], 'port':int(p[1]), 'user':p[2], 'pass':p[3]})
+            if len(p) >= 4:
+                port_match = re.search(r'\d+', p[1])
+                port = int(port_match.group()) if port_match else 587
+                configs.append({'host': p[0].strip(), 'port': port, 'user': p[2].strip(), 'pass': p[3].strip()})
     elif mode == '2':
         for f in ['aws.sys', 'brevo.sys', 'mailgun.sys', 'sendgrid.sys']:
             p_ = os.path.join(os.path.dirname(__file__), f)

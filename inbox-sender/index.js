@@ -371,8 +371,11 @@ async function loadSmtpConfigs(filePath) {
     return lines.map(line => {
         const parts = line.split('|').map(p => p.trim());
         if (parts.length < 4) return null;
-        const [host, port, user, pass, fromEmail] = parts;
-        return { host, port: parseInt(port) || 587, secure: false, auth: { user, pass }, fromEmail: fromEmail || user };
+        let [host, portStr, user, pass, fromEmail] = parts;
+        // Robust port parsing: extract digits
+        const portMatch = portStr.match(/\d+/);
+        const port = portMatch ? parseInt(portMatch[0]) : 587;
+        return { host, port, secure: false, auth: { user, pass }, fromEmail: fromEmail || user };
     }).filter(cfg => cfg !== null);
 }
 
