@@ -277,15 +277,20 @@ def encrypt_attachment(data, method, password):
     return data
 
 def replace_tags(text, replacements):
-    for k, v in replacements.items():
-        text = text.replace(f"[-{k}-]", str(v)).replace(f"[{k}]", str(v))
-        text = text.replace(f"-{k}-", str(v))
+    tags = ['email', 'emailuser', 'emaildomain', 'emaildomainname', 'time', 'randomstring', 'randomnumber', 'randomletters', 'randommd5', 'link']
+    for tag in tags:
+        val = None
+        if tag in replacements: val = replacements[tag]
+        elif tag == 'time': val = time.strftime("%Y-%m-%d %H:%M:%S")
+        elif tag == 'randomstring': val = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10))
+        elif tag == 'randomnumber': val = str(random.randint(1000, 9999))
+        elif tag == 'randomletters': val = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10))
+        elif tag == 'randommd5': val = hashlib.md5(str(random.random()).encode()).hexdigest()
 
-    text = text.replace('[-randomstring-]', ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10)))
-    text = text.replace('[-randomnumber-]', str(random.randint(1000, 9999)))
-    text = text.replace('[-randomletters-]', ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10)))
-    text = text.replace('[-randommd5-]', hashlib.md5(str(random.random()).encode()).hexdigest())
-    text = text.replace('[-time-]', time.strftime("%Y-%m-%d %H:%M:%S"))
+        if val is not None:
+            text = text.replace(f"[-{tag}-]", str(val))
+            text = text.replace(f"[{tag}]", str(val))
+            text = text.replace(f"-{tag}-", str(val))
     return text
 
 # --- Transport & Sending ---
@@ -298,6 +303,11 @@ def check_smtp_configs(configs):
             if c.get('type') in ['aws', 'mailgun', 'sendgrid']:
                 print(Fore.YELLOW + f"  [SKIP] API Config: {c['type']}")
                 live.append(c); continue
+
+            if c.get('type') == 'brevo':
+                c['host'] = 'smtp-relay.brevo.com'
+                c['port'] = 587
+                c['pass'] = c.get('apiKey')
 
             if c['port'] == 465:
                 server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=10)
@@ -321,6 +331,8 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
     msg['From'] = transport_config.get('from_email', transport_config.get('user', 'sender@example.com'))
     msg['Subject'] = subject
     msg['X-Priority'] = '1 (Highest)'
+    msg['Importance'] = 'High'
+    msg['X-MSMail-Priority'] = 'High'
     msg['X-Mailer'] = 'Microsoft Outlook 16.0'
     msg['X-Originating-IP'] = '127.0.0.1'
     msg['X-Forwarded-For'] = '127.0.0.1'
@@ -341,6 +353,32 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
     if transport_config.get('type') == 'aws':
         client = boto3.client('ses', region_name=transport_config['region'], aws_access_key_id=transport_config['accessKeyId'], aws_secret_access_key=transport_config['secretAccessKey'])
         client.send_raw_email(Source=msg['From'], Destinations=[msg['To']], RawMessage={'Data': msg.as_bytes()})
+    elif transport_config.get('type') == 'mailgun':
+        url = f"https://api.mailgun.net/v3/{transport_config['domain']}/messages.mime"
+        auth = ("api", transport_config['apiKey'])
+        files = {'to': (None, email), 'message': ('message.mime', msg.as_bytes())}
+        r = requests.post(url, auth=auth, files=files, timeout=30)
+        r.raise_for_status()
+    elif transport_config.get('type') == 'sendgrid':
+        url = "https://api.sendgrid.com/v3/mail/send"
+        headers = {"Authorization": f"Bearer {transport_config['apiKey']}"}
+        data = {
+            "personalizations": [{"to": [{"email": email}]}],
+            "from": {"email": transport_config.get('from_email', transport_config.get('user', 'sender@example.com'))},
+            "subject": subject,
+            "content": [{"type": "text/html", "value": content}]
+        }
+        if attachments:
+            data["attachments"] = []
+            for att in attachments:
+                data["attachments"].append({
+                    "content": base64.b64encode(att['content']).decode(),
+                    "filename": att['filename'],
+                    "disposition": "attachment",
+                    "content_id": att.get('cid', '')
+                })
+        r = requests.post(url, headers=headers, json=data, timeout=30)
+        r.raise_for_status()
     elif transport_config.get('type') == 'direct':
         mx = get_mx(email)
         proxy = config.get('proxy')
@@ -359,6 +397,11 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
                 import importlib
                 importlib.reload(socket) # Reset socket after proxy use
     else: # SMTP
+        if transport_config.get('type') == 'brevo':
+            transport_config['host'] = 'smtp-relay.brevo.com'
+            transport_config['port'] = 587
+            transport_config['pass'] = transport_config.get('apiKey')
+
         proxy = config.get('proxy')
         orig_socket = socket.socket
         if proxy:
@@ -368,7 +411,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             socket.socket = socks.socksocket
 
         try:
-            if transport_config['port'] == 465:
+            if transport_config.get('port') == 465:
                 server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
             else:
                 server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
@@ -479,7 +522,13 @@ async def main():
             live.update(update_ui())
 
             try:
-                repls = {'email': email, 'emailuser': email.split('@')[0], 'emaildomain': email.split('@')[1]}
+                domain_parts = email.split('@')[1].split('.')
+                repls = {
+                    'email': email,
+                    'emailuser': email.split('@')[0],
+                    'emaildomain': email.split('@')[1],
+                    'emaildomainname': domain_parts[0] if domain_parts else ''
+                }
                 if links: repls['link'] = random.choice(links)
 
                 content = replace_tags(open(random.choice(letters)).read(), repls)

@@ -375,7 +375,7 @@ async function loadSmtpConfigs(filePath) {
         // Robust port parsing: extract digits
         const portMatch = portStr.match(/\d+/);
         const port = portMatch ? parseInt(portMatch[0]) : 587;
-        return { host, port, secure: false, auth: { user, pass }, fromEmail: fromEmail || user };
+        return { host, port, secure: port === 465, auth: { user, pass }, fromEmail: fromEmail || user };
     }).filter(cfg => cfg !== null);
 }
 
@@ -642,12 +642,16 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     subject: emailSubject,
                     html: emailContent,
                     attachments,
+                    priority: 'high',
                     messageId: `<${randomstring.generate(12).toLowerCase()}@${replacements['-emaildomain-']}>`,
                     headers: {
                         'X-Originating-IP': '127.0.0.1',
                         'X-Mailer': 'Microsoft Outlook 16.0',
                         'X-Forwarded-For': '127.0.0.1',
-                        'X-Real-IP': '127.0.0.1'
+                        'X-Real-IP': '127.0.0.1',
+                        'X-Priority': '1 (Highest)',
+                        'Importance': 'High',
+                        'X-MSMail-Priority': 'High'
                     }
                 };
 
