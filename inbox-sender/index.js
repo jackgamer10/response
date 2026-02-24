@@ -62,11 +62,17 @@ const obf = {
 };
 
 async function checkLicense() {
-    const activationPath = path.join(__dirname, 'activation.sys'); // Renamed to .sys
+    const activationPath = path.join(__dirname, 'activation.sys');
+    const hiddenActivationPath = path.join(__dirname, '.activation.sys');
     const hwid = await getHWID();
 
     try {
-        const rawData = await fs.readFile(activationPath, 'utf-8');
+        let rawData;
+        try {
+            rawData = await fs.readFile(activationPath, 'utf-8');
+        } catch (e) {
+            rawData = await fs.readFile(hiddenActivationPath, 'utf-8');
+        }
         const data = obf.decode(rawData);
 
         if (data.hwid !== hwid) {
@@ -88,7 +94,14 @@ async function checkLicense() {
         const token = (await askQuestion('Enter Activation Token: ')).trim().toUpperCase();
         if (token === generateToken(hwid)) {
             const data = { hwid, token, installPath: __dirname };
-            await fs.writeFile(activationPath, obf.encode(data));
+            const targetPath = process.platform === 'win32' ? activationPath : hiddenActivationPath;
+            await fs.writeFile(targetPath, obf.encode(data));
+
+            // Hide the file on Windows
+            if (process.platform === 'win32') {
+                require('child_process').exec(`attrib +h "${targetPath}"`);
+            }
+
             console.log(`${colors.green}[+] Activation successful! Please restart.${colors.reset}`);
             process.exit(0);
         } else {

@@ -64,10 +64,16 @@ def decode_obf(data):
 
 async def check_license():
     activation_path = os.path.join(os.path.dirname(__file__), 'activation.sys')
+    hidden_path = os.path.join(os.path.dirname(__file__), '.activation.sys')
     hwid = get_hwid()
-    if os.path.exists(activation_path):
+
+    current_path = None
+    if os.path.exists(activation_path): current_path = activation_path
+    elif os.path.exists(hidden_path): current_path = hidden_path
+
+    if current_path:
         try:
-            with open(activation_path, 'r') as f:
+            with open(current_path, 'r') as f:
                 data = decode_obf(f.read())
             if data.get('hwid') == hwid and data.get('token') == generate_token(hwid):
                 print(Fore.GREEN + f"[+] License activated for HWID: {hwid[:8]}...")
@@ -78,7 +84,14 @@ async def check_license():
     token = input(Fore.WHITE + 'Enter Activation Token: ').strip().upper()
     if token == generate_token(hwid):
         data = {'hwid': hwid, 'token': token, 'installPath': os.path.dirname(__file__)}
-        with open(activation_path, 'w') as f: f.write(encode_obf(data))
+        target_path = activation_path if os.name == 'nt' else hidden_path
+        with open(target_path, 'w') as f: f.write(encode_obf(data))
+
+        # Hide file on Windows
+        if os.name == 'nt':
+            import subprocess
+            subprocess.run(['attrib', '+h', target_path], check=False)
+
         print(Fore.GREEN + "[+] Activation successful! Please restart.")
         sys.exit(0)
     else:
