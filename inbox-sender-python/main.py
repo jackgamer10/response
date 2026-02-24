@@ -103,6 +103,7 @@ async def check_license():
 stats = {
     'total': 0, 'sent': 0, 'failed': 0, 'invalid': 0,
     'start_time': time.time(), 'current_email': '', 'current_smtp': '',
+    'current_proxy': 'None',
     'status': 'Idle', 'spam_score': 0.0,
     'bounces': {'hard': 0, 'soft': 0, 'spam': 0},
     'domains': {},
@@ -124,6 +125,7 @@ def update_ui():
     diag_table = Table(show_header=False, box=None, expand=True)
     p25_col = "[green]Open[/green]" if stats['port25'] == 'Open' else ("[red]Blocked[/red]" if stats['port25'] == 'Blocked' else "[yellow]Proxied[/yellow]")
     diag_table.add_row(f"DNS VERIFY: {dns_status}", f"PORT 25: {p25_col}", f"PROXIES: [green]{stats['proxies']['live']}/{stats['proxies']['total']} Live[/green]")
+    diag_table.add_row(f"CURRENT SMTP: [yellow]{stats['current_smtp']}", f"PROXY: [cyan]{stats['current_proxy']}", "")
 
     bounce_table = Table(show_header=False, box=None, expand=True)
     bounce_table.add_row(f"HARD: [red]{stats['bounces']['hard']}", f"SOFT: [yellow]{stats['bounces']['soft']}", f"SPAM: [red]{stats['bounces']['spam']}")
@@ -156,8 +158,13 @@ def update_ui():
 def get_mx(email):
     try:
         domain = email.split('@')[1]
-        answers = dns.resolver.resolve(domain, 'MX')
-        return sorted([(r.preference, r.exchange.to_text()) for r in answers])[0][1]
+        try:
+            answers = dns.resolver.resolve(domain, 'MX')
+            hosts = sorted([(r.preference, r.exchange.to_text().rstrip('.')) for r in answers])
+            return hosts[0][1]
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+            # Fallback to A record if no MX
+            return domain
     except Exception: return None
 
 def load_files(filepath):
@@ -352,13 +359,25 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
 
     if transport_config.get('type') == 'aws':
         client = boto3.client('ses', region_name=transport_config['region'], aws_access_key_id=transport_config['accessKeyId'], aws_secret_access_key=transport_config['secretAccessKey'])
-        client.send_raw_email(Source=msg['From'], Destinations=[msg['To']], RawMessage={'Data': msg.as_bytes()})
+        last_err = None
+        for _ in range(3):
+            try:
+                client.send_raw_email(Source=msg['From'], Destinations=[msg['To']], RawMessage={'Data': msg.as_bytes()})
+                return
+            except Exception as e: last_err = e; time.sleep(1)
+        if last_err: raise last_err
     elif transport_config.get('type') == 'mailgun':
         url = f"https://api.mailgun.net/v3/{transport_config['domain']}/messages.mime"
         auth = ("api", transport_config['apiKey'])
         files = {'to': (None, email), 'message': ('message.mime', msg.as_bytes())}
-        r = requests.post(url, auth=auth, files=files, timeout=30)
-        r.raise_for_status()
+        last_err = None
+        for _ in range(3):
+            try:
+                r = requests.post(url, auth=auth, files=files, timeout=30)
+                r.raise_for_status()
+                return
+            except Exception as e: last_err = e; time.sleep(1)
+        if last_err: raise last_err
     elif transport_config.get('type') == 'sendgrid':
         url = "https://api.sendgrid.com/v3/mail/send"
         headers = {"Authorization": f"Bearer {transport_config['apiKey']}"}
@@ -377,8 +396,14 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
                     "disposition": "attachment",
                     "content_id": att.get('cid', '')
                 })
-        r = requests.post(url, headers=headers, json=data, timeout=30)
-        r.raise_for_status()
+        last_err = None
+        for _ in range(3):
+            try:
+                r = requests.post(url, headers=headers, json=data, timeout=30)
+                r.raise_for_status()
+                return
+            except Exception as e: last_err = e; time.sleep(1)
+        if last_err: raise last_err
     elif transport_config.get('type') == 'direct':
         mx = get_mx(email)
         proxy = config.get('proxy')
@@ -389,8 +414,16 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             socket.socket = socks.socksocket
 
         try:
-            with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10), local_hostname=transport_config.get('heloDomain')) as server:
-                server.send_message(msg)
+            last_err = None
+            for _ in range(transport_config.get('retries', 3)):
+                try:
+                    with smtplib.SMTP(mx, 25, timeout=transport_config.get('timeout', 10), local_hostname=transport_config.get('heloDomain')) as server:
+                        server.send_message(msg)
+                    return
+                except Exception as e:
+                    last_err = e
+                    time.sleep(1)
+            if last_err: raise last_err
         finally:
             if proxy:
                 import socket
@@ -411,42 +444,121 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             socket.socket = socks.socksocket
 
         try:
-            if transport_config.get('port') == 465:
-                server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
-            else:
-                server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10))
+            last_err = None
+            for _ in range(config.get('directMxOptions', {}).get('retries', 3)):
                 try:
-                    server.starttls()
-                except Exception: pass
+                    helo = config.get('directMxOptions', {}).get('heloDomain', 'localhost')
+                    if transport_config.get('port') == 465:
+                        context = ssl.create_default_context()
+                        server = smtplib.SMTP_SSL(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10), local_hostname=helo, context=context)
+                    else:
+                        server = smtplib.SMTP(transport_config['host'], transport_config['port'], timeout=transport_config.get('timeout', 10), local_hostname=helo)
+                        try:
+                            server.starttls()
+                        except Exception: pass
 
-            with server:
-                server.login(transport_config['user'], transport_config['pass'])
-                server.send_message(msg)
+                    with server:
+                        server.login(transport_config['user'], transport_config['pass'])
+                        server.send_message(msg)
+                    return # Success
+                except Exception as e:
+                    last_err = e
+                    time.sleep(1)
+            if last_err: raise last_err
         finally:
             if proxy:
                 socket.socket = orig_socket
 
 # --- Main Flow ---
 
+def show_settings_dashboard(app_config, direct_mx_options):
+    console = Console()
+    while True:
+        table = Table(title="[bold cyan]Operation Configuration Dashboard[/bold cyan]", show_header=True, header_style="bold magenta")
+        table.add_column("Option", style="white")
+        table.add_column("Current Value", style="yellow")
+        table.add_column("Description", style="dim white")
+
+        table.add_row("1. Delay (ms)", str(app_config.get('delayBetweenEmails', 2000)), "Wait time between each email")
+        table.add_row("2. Rotate Letters", "ENABLED" if app_config.get('rotateLetters') else "DISABLED", "Use different templates for each email")
+        table.add_row("3. Shorten Links", "ENABLED" if app_config.get('autoShortenLinks') else "DISABLED", "Automatically clean/shorten URLs")
+        table.add_row("4. Encryption", app_config.get('encryptionMethod', 'ZIP'), "Attachment protection (ZIP/AES/None)")
+        table.add_row("5. Sign Attachment", "ENABLED" if app_config.get('signAttachment') else "DISABLED", "Add cryptographic signature to files")
+        table.add_row("6. HELO Domain", direct_mx_options.get('heloDomain', 'localhost'), "HELO/EHLO hostname for SMTP")
+        table.add_row("7. DNS Verify", "ENABLED" if direct_mx_options.get('verifyDns') else "DISABLED", "Deep check recipient MX before sending")
+        table.add_row("8. SMTP Timeout", str(direct_mx_options.get('timeout', 10000)), "Connection timeout in ms")
+        table.add_row("9. SAVE & EXIT", "", "Apply changes and return to main menu")
+
+        console.print(table)
+        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (1-9): ").strip()
+
+        if choice == '1':
+            val = input("Enter new delay (ms): ")
+            if val.isdigit(): app_config['delayBetweenEmails'] = int(val)
+        elif choice == '2': app_config['rotateLetters'] = not app_config.get('rotateLetters', True)
+        elif choice == '3': app_config['autoShortenLinks'] = not app_config.get('autoShortenLinks', False)
+        elif choice == '4':
+            methods = ['ZIP', 'AES', 'None']
+            curr = app_config.get('encryptionMethod', 'ZIP')
+            app_config['encryptionMethod'] = methods[(methods.index(curr) + 1) % len(methods)]
+        elif choice == '5': app_config['signAttachment'] = not app_config.get('signAttachment', True)
+        elif choice == '6':
+            val = input("Enter HELO domain: ")
+            if val: direct_mx_options['heloDomain'] = val
+        elif choice == '7': direct_mx_options['verifyDns'] = not direct_mx_options.get('verifyDns', True)
+        elif choice == '8':
+            val = input("Enter timeout (ms): ")
+            if val.isdigit(): direct_mx_options['timeout'] = int(val)
+        elif choice == '9':
+            # Save to files
+            with open(os.path.join(os.path.dirname(__file__), 'config.sys'), 'w') as f: f.write(encode_obf(app_config))
+            with open(os.path.join(os.path.dirname(__file__), 'direct_mx_config.sys'), 'w') as f: f.write(encode_obf(direct_mx_options))
+            break
+
 async def main():
     if not await check_license(): return
 
-    print(Fore.CYAN + "\n1. SMTP (from smtp.txt)\n2. API (aws.sys, brevo.sys, etc.)\n3. Direct MX (Port 25)\n" + Fore.YELLOW + "4. Run Pre-Send Connectivity & Proxy Diagnostic")
-    mode = input(Fore.WHITE + "Select mode (1-4): ").strip()
-
-    if mode == '4':
-        proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
-        validate_proxies(proxies)
-        check_direct_mx_connectivity(proxies[0] if proxies else None)
-        input(Fore.WHITE + "\nDiagnostic complete. Press Enter to return to menu...")
-        import asyncio
-        return await main()
-
-    configs = []
-    direct_mx_options = load_direct_mx_config()
     app_config = load_app_config()
+    direct_mx_options = load_direct_mx_config()
     dkim_options = load_dkim_config()
 
+    while True:
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print(Fore.MAGENTA + """
+ ███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗██╗ ██████╗██╗   ██╗ ██████╗ ██╗  ██╗
+ ████╗ ████║██╔══██╗██╔════╝ ╚██╗██╔╝╚██╗██╔╝██║██╔════╝██║   ██║██╔═══██╗╚██╗██╔╝
+ ██╔████╔██║███████║██║  ███╗ ╚███╔╝  ╚███╔╝ ██║██║     ██║   ██║██║   ██║ ╚███╔╝
+ ██║╚██╔╝██║██╔══██║██║   ██║ ██╔██╗  ██╔██╗ ██║██║     ╚██╗ ██╔╝██║   ██║ ██╔██╗
+ ██║ ╚═╝ ██║██║  ██║╚██████╔╝██╔╝ ██╗██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝██╔╝ ██╗
+ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝
+        """)
+        print(Fore.CYAN + "1. SMTP (from smtp.txt)")
+        print(Fore.CYAN + "2. API (aws.sys, brevo.sys, etc.)")
+        print(Fore.CYAN + "3. Direct MX (Port 25)")
+        print(Fore.YELLOW + "4. Settings / Configuration Dashboard")
+        print(Fore.YELLOW + "5. Run Connectivity & Proxy Diagnostic")
+        print(Fore.RED + "6. Exit")
+
+        mode = input(Fore.WHITE + "\nSelect mode (1-6): ").strip()
+
+        if mode == '4':
+            show_settings_dashboard(app_config, direct_mx_options)
+            continue
+        elif mode == '5':
+            proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
+            validate_proxies(proxies)
+            check_direct_mx_connectivity(proxies[0] if proxies else None)
+            input(Fore.WHITE + "\nDiagnostic complete. Press Enter to return to menu...")
+            continue
+        elif mode == '6':
+            sys.exit(0)
+        elif mode in ['1', '2', '3']:
+            break
+        else:
+            print(Fore.RED + "Invalid selection!")
+            time.sleep(1)
+
+    configs = []
     if mode == '1':
         import re
         for l in load_files(os.path.join(os.path.dirname(__file__), 'smtp.txt')):
@@ -592,7 +704,8 @@ async def main():
                     from_idx += 1
 
                 proxy = proxies[idx % len(proxies)] if proxies else None
-                send_email(conf, email, content, subject, atts, dkim_options, {**app_config, 'proxy': proxy})
+                stats['current_proxy'] = proxy if proxy else 'None'
+                send_email(conf, email, content, subject, atts, dkim_options, {**app_config, 'proxy': proxy, 'directMxOptions': direct_mx_options})
                 stats['sent'] += 1
                 stats['domains'][domain]['sent'] += 1
             except Exception as e:
@@ -606,7 +719,7 @@ async def main():
                 else: stats['bounces']['soft'] += 1
 
             live.update(update_ui())
-            time.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
+            await asyncio.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
 
 if __name__ == "__main__":
     asyncio.run(main())
