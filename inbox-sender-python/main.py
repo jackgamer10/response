@@ -411,7 +411,10 @@ async def main():
             if len(p) >= 4:
                 port_match = re.search(r'\d+', p[1])
                 port = int(port_match.group()) if port_match else 587
-                configs.append({'host': p[0].strip(), 'port': port, 'user': p[2].strip(), 'pass': p[3].strip()})
+                cfg = {'host': p[0].strip(), 'port': port, 'user': p[2].strip(), 'pass': p[3].strip()}
+                if len(p) >= 5:
+                    cfg['from_email'] = p[4].strip()
+                configs.append(cfg)
     elif mode == '2':
         for f in ['aws.sys', 'brevo.sys', 'mailgun.sys', 'sendgrid.sys']:
             p_ = os.path.join(os.path.dirname(__file__), f)
