@@ -434,13 +434,14 @@ async function loadAppConfig() {
         const raw = await fs.readFile(path.join(__dirname, 'config.sys'), 'utf-8');
         const config = obf.decode(raw);
         if (config.skipSmtpCheck === undefined) config.skipSmtpCheck = false;
+        if (config.useCustomFrom === undefined) config.useCustomFrom = true;
         return config;
     } catch (e) {
         return {
             rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
             delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
             encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true,
-            skipSmtpCheck: false
+            skipSmtpCheck: false, useCustomFrom: true
         };
     }
 }
@@ -544,10 +545,11 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
         console.log(`${colors.cyan}│${colors.white} 7. DNS Verify:      ${colors.yellow}${(directMxOptions.verifyDns ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 8. SMTP Timeout:    ${colors.yellow}${directMxOptions.timeout.toString().padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 9. Skip SMTP Check: ${colors.yellow}${(appConfig.skipSmtpCheck ? "YES" : "NO").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} C. Use Custom From: ${colors.yellow}${(appConfig.useCustomFrom ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 0. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
 
-        const choice = await askQuestion('\nSelect option to toggle/edit (0-9): ');
+        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C): ')).toUpperCase();
 
         if (choice === '1') {
             const val = await askQuestion('Enter new delay (ms): ');
@@ -572,6 +574,8 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
             if (!isNaN(parseInt(val))) directMxOptions.timeout = parseInt(val);
         } else if (choice === '9') {
             appConfig.skipSmtpCheck = !appConfig.skipSmtpCheck;
+        } else if (choice === 'C') {
+            appConfig.useCustomFrom = !appConfig.useCustomFrom;
         } else if (choice === '0') {
             await fs.writeFile(path.join(__dirname, 'config.sys'), obf.encode(appConfig));
             const currentMxConfig = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8'));
@@ -717,7 +721,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
                 const transporter = await createTransporter(currentSmtpConfig, currentProxy, email, config.useDKIM ? config.dkimOptions : null, config.directMxOptions);
                 let fromAddress;
-                if (fromEmails.length > 0) { fromAddress = `"${dynamicSenderName}" <${replaceTags(fromEmails[fromIndex % fromEmails.length], replacements)}>`; fromIndex++; }
+                if (config.useCustomFrom && fromEmails.length > 0) { fromAddress = `"${dynamicSenderName}" <${replaceTags(fromEmails[fromIndex % fromEmails.length], replacements)}>`; fromIndex++; }
                 else if (hideFromEmail) { fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`; }
                 else { fromAddress = `"${dynamicSenderName}" <${useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : (currentSmtpConfig.auth ? currentSmtpConfig.auth.user : 'info@' + replacements['-emaildomain-'])}>`; }
 

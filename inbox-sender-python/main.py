@@ -212,13 +212,14 @@ def load_app_config():
         if os.path.exists(path):
             config = decode_obf(open(path, 'r').read())
             if 'skipSmtpCheck' not in config: config['skipSmtpCheck'] = False
+            if 'useCustomFrom' not in config: config['useCustomFrom'] = True
             return config
     except Exception: pass
     return {
         'rotateLetters': True, 'autoShortenLinks': False, 'sendImageAttachment': True,
         'delayBetweenEmails': 2000, 'pauseEvery': 50, 'pauseTime': 30000,
         'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True,
-        'skipSmtpCheck': False
+        'skipSmtpCheck': False, 'useCustomFrom': True
     }
 
 def load_dkim_config():
@@ -439,6 +440,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
     elif transport_config.get('type') == 'direct':
         mx = get_mx(email)
         proxy = config.get('proxy')
+        orig_socket = socket.socket
         if proxy:
             import socks
             url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
@@ -521,10 +523,11 @@ def show_settings_dashboard(app_config, direct_mx_options):
         table.add_row("7. DNS Verify", "ENABLED" if direct_mx_options.get('verifyDns') else "DISABLED", "Deep check recipient MX before sending")
         table.add_row("8. SMTP Timeout", str(direct_mx_options.get('timeout', 10000)), "Connection timeout in ms")
         table.add_row("9. Skip SMTP Check", "YES" if app_config.get('skipSmtpCheck') else "NO", "Bypass initial SMTP availability check")
+        table.add_row("C. Use Custom From", "ENABLED" if app_config.get('useCustomFrom') else "DISABLED", "Enable rotation of 'From' email addresses")
         table.add_row("0. SAVE & EXIT", "", "Apply changes and return to main menu")
 
         console.print(table)
-        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9): ").strip()
+        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9, C): ").strip().upper()
 
         if choice == '1':
             val = input("Enter new delay (ms): ")
@@ -544,6 +547,7 @@ def show_settings_dashboard(app_config, direct_mx_options):
             val = input("Enter timeout (ms): ")
             if val.isdigit(): direct_mx_options['timeout'] = int(val)
         elif choice == '9': app_config['skipSmtpCheck'] = not app_config.get('skipSmtpCheck', False)
+        elif choice == 'C': app_config['useCustomFrom'] = not app_config.get('useCustomFrom', True)
         elif choice == '0':
             # Save to files
             with open(os.path.join(os.path.dirname(__file__), 'config.sys'), 'w') as f: f.write(encode_obf(app_config))
@@ -748,7 +752,7 @@ async def main():
                 live.update(update_ui())
 
                 conf = configs[idx % len(configs)].copy()
-                if from_emails:
+                if app_config.get('useCustomFrom') and from_emails:
                     conf['from_email'] = replace_tags(from_emails[from_idx % len(from_emails)], repls)
                     from_idx += 1
 
