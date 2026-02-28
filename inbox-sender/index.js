@@ -447,13 +447,17 @@ async function loadAppConfig() {
         if (config.skipSmtpCheck === undefined) config.skipSmtpCheck = false;
         if (config.useCustomFrom === undefined) config.useCustomFrom = true;
         if (config.sendBarcode === undefined) config.sendBarcode = true;
+        if (config.aiEnabled === undefined) config.aiEnabled = false;
+        if (config.aiScanEnabled === undefined) config.aiScanEnabled = false;
+        if (config.aiApiKey === undefined) config.aiApiKey = '';
         return config;
     } catch (e) {
         return {
             rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
             delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
             encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true,
-            skipSmtpCheck: false, useCustomFrom: true, sendBarcode: true
+            skipSmtpCheck: false, useCustomFrom: true, sendBarcode: true,
+            aiEnabled: false, aiScanEnabled: false, aiApiKey: ''
         };
     }
 }
@@ -559,10 +563,13 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
         console.log(`${colors.cyan}│${colors.white} 9. Skip SMTP Check: ${colors.yellow}${(appConfig.skipSmtpCheck ? "YES" : "NO").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} C. Use Custom From: ${colors.yellow}${(appConfig.useCustomFrom ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} B. Send Barcode:    ${colors.yellow}${(appConfig.sendBarcode ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} A. AI Features:     ${colors.yellow}${(appConfig.aiEnabled ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} S. AI Scan/Enhance: ${colors.yellow}${(appConfig.aiScanEnabled ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} K. AI API Key:      ${colors.yellow}${(appConfig.aiApiKey ? (appConfig.aiApiKey.substring(0, 10) + "...") : "NOT SET").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 0. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
 
-        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C, B): ')).toUpperCase();
+        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C, B, A, S, K): ')).toUpperCase();
 
         if (choice === '1') {
             const val = await askQuestion('Enter new delay (ms): ');
@@ -591,6 +598,13 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
             appConfig.useCustomFrom = !appConfig.useCustomFrom;
         } else if (choice === 'B') {
             appConfig.sendBarcode = !appConfig.sendBarcode;
+        } else if (choice === 'A') {
+            appConfig.aiEnabled = !appConfig.aiEnabled;
+        } else if (choice === 'S') {
+            appConfig.aiScanEnabled = !appConfig.aiScanEnabled;
+        } else if (choice === 'K') {
+            const val = await askQuestion('Enter OpenAI API Key: ');
+            if (val) appConfig.aiApiKey = val.trim();
         } else if (choice === '0') {
             await fs.writeFile(path.join(__dirname, 'config.sys'), obf.encode(appConfig));
             const currentMxConfig = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8'));
@@ -615,9 +629,10 @@ async function chooseSendingMethod() {
     console.log(`${colors.white}  1. SMTP (from smtp.txt)${colors.reset}`);
     console.log(`${colors.white}  2. API Configs (AWS, Brevo, Mailgun, SendGrid)${colors.reset}`);
     console.log(`${colors.white}  3. Direct MX Proxy Sending${colors.reset}`);
-    console.log(`${colors.yellow}  4. Settings / Configuration Dashboard${colors.reset}`);
-    console.log(`${colors.yellow}  5. Run Pre-Send Connectivity & Proxy Diagnostic${colors.reset}`);
-    console.log(`${colors.red}  6. Exit${colors.reset}`);
+    console.log(`${colors.magenta}  4. AI Letter Crafter (Draft with Prompt)${colors.reset}`);
+    console.log(`${colors.yellow}  5. Settings / Configuration Dashboard${colors.reset}`);
+    console.log(`${colors.yellow}  6. Run Pre-Send Connectivity & Proxy Diagnostic${colors.reset}`);
+    console.log(`${colors.red}  7. Exit${colors.reset}`);
 
     const choice = await askQuestion('\nSelect option (1-6): ');
     return choice.trim();
@@ -638,6 +653,74 @@ async function getRecipientLogo(email) {
         const response = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 3000 });
         return Buffer.from(response.data, 'binary');
     } catch (err) { return null; }
+}
+
+async function aiLetterScanner(appConfig, htmlContent) {
+    const OpenAI = require('openai');
+    const client = new OpenAI({ apiKey: appConfig.aiApiKey });
+
+    console.log(`${colors.yellow}[AI] Scanning and Enhancing Letter...${colors.reset}`);
+
+    try {
+        const response = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: "You are an email deliverability expert. Analyze the provided HTML letter. 1. Provide a predicted spam score (0-10), 2. Suggest improvements, 3. Provide an enhanced HTML version that maintains placeholders like [-emailuser-], [-link-], etc. Output ONLY a JSON object with 'score', 'suggestions', and 'enhancedHtml' keys." },
+                { role: "user", content: htmlContent }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        const data = JSON.parse(response.choices[0].message.content);
+        console.log(`${colors.cyan}[AI] Predicted Spam Score: ${data.score}/10${colors.reset}`);
+        console.log(`${colors.cyan}[AI] Suggestions: ${data.suggestions}${colors.reset}`);
+
+        return data.enhancedHtml;
+    } catch (err) {
+        console.error(`${colors.red}[AI] Scan failed: ${err.message}${colors.reset}`);
+        return htmlContent;
+    }
+}
+
+async function aiLetterCrafter(appConfig) {
+    const OpenAI = require('openai');
+    const client = new OpenAI({ apiKey: appConfig.aiApiKey });
+
+    console.clear();
+    console.log(`${colors.magenta}┌───────────────────────────────────────────────────┐${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.bright}${colors.cyan}             magxxicVox AI LETTER CRAFTER          ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}└───────────────────────────────────────────────────┘${colors.reset}`);
+
+    const prompt = await askQuestion('\nDescribe the letter you want to draft (prompt): ');
+    if (!prompt) return;
+
+    console.log(`${colors.yellow}[+] Consulting magxxicVox AI...${colors.reset}`);
+
+    try {
+        const response = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: "You are a professional copywriter specialized in high-deliverability email marketing. Generate a letter in two parts: 1. HTML version (professional and modern), 2. Plain Text version. Use placeholders like [-emailuser-], [-link-], and [-recipient-logo-]. Output ONLY a JSON object with 'html' and 'text' keys." },
+                { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        const data = JSON.parse(response.choices[0].message.content);
+        const fileName = `ai_draft_${Date.now()}.html`;
+        await fs.writeFile(path.join(__dirname, 'letters', fileName), data.html);
+
+        console.log(`\n${colors.green}[+] AI Letter Drafted and Saved!${colors.reset}`);
+        console.log(`${colors.white}File: letters/${fileName}${colors.reset}\n`);
+        console.log(`${colors.cyan}--- PLAIN TEXT PREVIEW ---${colors.reset}`);
+        console.log(data.text);
+        console.log(`${colors.cyan}--------------------------${colors.reset}`);
+
+        await askQuestion('\nPress Enter to return...');
+    } catch (err) {
+        console.error(`${colors.red}[!] AI Error: ${err.message}${colors.reset}`);
+        await new Promise(r => setTimeout(r, 3000));
+    }
 }
 
 async function shortenLinks(html) {
@@ -688,6 +771,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
         let smtpIndex = 0; let proxyIndex = 0; let fromIndex = 0; let letterIndex = 0; let linkIndex = 0;
 
+        let idx = 0;
         for (const email of rawEmailList) {
             const domain = email.split('@')[1];
             if (!stats.domains[domain]) stats.domains[domain] = { sent: 0, failed: 0 };
@@ -720,6 +804,10 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 const letterPath = config.rotateLetters ? letters[letterIndex % letters.length] : letters[0];
                 if (!letterPath) throw new Error("No letters found");
                 let emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
+
+                if (config.aiEnabled && config.aiScanEnabled && config.aiApiKey && idx === 0) {
+                    emailContent = await aiLetterScanner(config, emailContent);
+                }
                 const emailSubject = replaceTags(subjects[Math.floor(Math.random() * subjects.length)] || "No Subject", replacements);
                 const dynamicSenderName = replaceTags(senderName, replacements);
 
@@ -752,6 +840,8 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 }
 
                 const transporter = await createTransporter(currentSmtpConfig, currentProxy, email, config.useDKIM ? config.dkimOptions : null, config.directMxOptions);
+
+                stats.currentSpamScore = evaluateSpamScore(emailSubject, emailContent).score;
                 let fromAddress;
                 if (config.useCustomFrom && fromEmails.length > 0) { fromAddress = `"${dynamicSenderName}" <${replaceTags(fromEmails[fromIndex % fromEmails.length], replacements)}>`; fromIndex++; }
                 else if (hideFromEmail) { fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`; }
@@ -853,7 +943,14 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 updateStatsUI();
                 await fs.appendFile(path.join(__dirname, 'undeliverable_emails.log'), `${email} | ERROR: ${err.message}\n`).catch(() => {});
             }
-            finally { smtpIndex = (smtpIndex + 1) % smtpConfigs.length; if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length; if (config.rotateLetters) letterIndex++; if (links.length > 0) linkIndex++; await new Promise(r => setTimeout(r, delayBetweenEmails)); }
+            finally {
+                idx++;
+                smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
+                if (config.rotateLetters) letterIndex++;
+                if (links.length > 0) linkIndex++;
+                await new Promise(r => setTimeout(r, delayBetweenEmails));
+            }
         }
     } catch (err) { console.error(`${colors.red}Error in sendEmails: ${err.message}${colors.reset}`); }
 }
@@ -869,9 +966,17 @@ async function run() {
         method = await chooseSendingMethod();
 
         if (method === '4') {
-            await showSettingsDashboard(appConfig, directMxOptions);
+            if (!appConfig.aiEnabled || !appConfig.aiApiKey) {
+                console.log(`${colors.red}[!] AI Features disabled or API Key missing.${colors.reset}`);
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+            await aiLetterCrafter(appConfig);
             continue;
         } else if (method === '5') {
+            await showSettingsDashboard(appConfig, directMxOptions);
+            continue;
+        } else if (method === '6') {
             const proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
             await validateProxies(proxies);
             await checkDirectMxConnectivity(proxies.length > 0 ? proxies[0] : null);

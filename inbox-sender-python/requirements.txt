@@ -10,3 +10,4 @@ psutil
 PySocks
 Pillow
 colorama
+openai

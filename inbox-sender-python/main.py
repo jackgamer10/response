@@ -201,6 +201,71 @@ async def get_recipient_logo(email):
     except Exception: pass
     return None
 
+async def ai_letter_scanner(app_config, html_content):
+    from openai import OpenAI
+    client = OpenAI(api_key=app_config.get('aiApiKey'))
+
+    print(Fore.YELLOW + "[AI] Scanning and Enhancing Letter...")
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an email deliverability expert. Analyze the provided HTML letter. 1. Provide a predicted spam score (0-10), 2. Suggest improvements, 3. Provide an enhanced HTML version that maintains placeholders like [-emailuser-], [-link-], etc. Output ONLY a JSON object with 'score', 'suggestions', and 'enhancedHtml' keys."},
+                {"role": "user", "content": html_content}
+            ],
+            response_format={ "type": "json_object" }
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        print(Fore.CYAN + f"[AI] Predicted Spam Score: {data['score']}/10")
+        print(Fore.CYAN + f"[AI] Suggestions: {data['suggestions']}")
+
+        return data['enhancedHtml']
+    except Exception as e:
+        print(Fore.RED + f"[AI] Scan failed: {str(e)}")
+        return html_content
+
+async def ai_letter_crafter(app_config):
+    from openai import OpenAI
+    client = OpenAI(api_key=app_config.get('aiApiKey'))
+
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(Fore.MAGENTA + "┌───────────────────────────────────────────────────┐")
+    print(Fore.MAGENTA + "│" + Style.BRIGHT + Fore.CYAN + "             magxxicVox AI LETTER CRAFTER          " + Fore.MAGENTA + "│")
+    print(Fore.MAGENTA + "└───────────────────────────────────────────────────┘")
+
+    prompt = input("\nDescribe the letter you want to draft (prompt): ").strip()
+    if not prompt: return
+
+    print(Fore.YELLOW + "[+] Consulting magxxicVox AI...")
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a professional copywriter specialized in high-deliverability email marketing. Generate a letter in two parts: 1. HTML version (professional and modern), 2. Plain Text version. Use placeholders like [-emailuser-], [-link-], and [-recipient-logo-]. Output ONLY a JSON object with 'html' and 'text' keys."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={ "type": "json_object" }
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        file_name = f"ai_draft_{int(time.time())}.html"
+        with open(os.path.join(os.path.dirname(__file__), 'letters', file_name), 'w', encoding='utf-8') as f:
+            f.write(data['html'])
+
+        print(Fore.GREEN + f"\n[+] AI Letter Drafted and Saved!")
+        print(Fore.WHITE + f"File: letters/{file_name}\n")
+        print(Fore.CYAN + "--- PLAIN TEXT PREVIEW ---")
+        print(data['text'])
+        print(Fore.CYAN + "--------------------------")
+
+        input("\nPress Enter to return...")
+    except Exception as e:
+        print(Fore.RED + f"[!] AI Error: {str(e)}")
+        time.sleep(3)
+
 def load_direct_mx_config():
     cfg_path = os.path.join(os.path.dirname(__file__), 'direct_mx_config.sys')
     set_path = os.path.join(os.path.dirname(__file__), 'direct_mx_settings.sys')
@@ -221,13 +286,17 @@ def load_app_config():
             if 'skipSmtpCheck' not in config: config['skipSmtpCheck'] = False
             if 'useCustomFrom' not in config: config['useCustomFrom'] = True
             if 'sendBarcode' not in config: config['sendBarcode'] = True
+            if 'aiEnabled' not in config: config['aiEnabled'] = False
+            if 'aiScanEnabled' not in config: config['aiScanEnabled'] = False
+            if 'aiApiKey' not in config: config['aiApiKey'] = ''
             return config
     except Exception: pass
     return {
         'rotateLetters': True, 'autoShortenLinks': False, 'sendImageAttachment': True,
         'delayBetweenEmails': 2000, 'pauseEvery': 50, 'pauseTime': 30000,
         'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True,
-        'skipSmtpCheck': False, 'useCustomFrom': True, 'sendBarcode': True
+        'skipSmtpCheck': False, 'useCustomFrom': True, 'sendBarcode': True,
+        'aiEnabled': False, 'aiScanEnabled': False, 'aiApiKey': ''
     }
 
 def load_dkim_config():
@@ -537,10 +606,13 @@ def show_settings_dashboard(app_config, direct_mx_options):
         table.add_row("9. Skip SMTP Check", "YES" if app_config.get('skipSmtpCheck') else "NO", "Bypass initial SMTP availability check")
         table.add_row("C. Use Custom From", "ENABLED" if app_config.get('useCustomFrom') else "DISABLED", "Enable rotation of 'From' email addresses")
         table.add_row("B. Send Barcode", "ENABLED" if app_config.get('sendBarcode') else "DISABLED", "Toggle barcode generation in email body")
+        table.add_row("A. AI Features", "ENABLED" if app_config.get('aiEnabled') else "DISABLED", "Enable AI letter drafting and scanning")
+        table.add_row("S. AI Scan/Enhance", "ENABLED" if app_config.get('aiScanEnabled') else "DISABLED", "Enable AI spam checking/enhancing before send")
+        table.add_row("K. AI API Key", (app_config.get('aiApiKey', '')[:10] + '...') if app_config.get('aiApiKey') else 'NOT SET', "OpenAI API Key for AI features")
         table.add_row("0. SAVE & EXIT", "", "Apply changes and return to main menu")
 
         console.print(table)
-        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9, C, B): ").strip().upper()
+        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9, C, B, A, S, K): ").strip().upper()
 
         if choice == '1':
             val = input("Enter new delay (ms): ")
@@ -562,6 +634,11 @@ def show_settings_dashboard(app_config, direct_mx_options):
         elif choice == '9': app_config['skipSmtpCheck'] = not app_config.get('skipSmtpCheck', False)
         elif choice == 'C': app_config['useCustomFrom'] = not app_config.get('useCustomFrom', True)
         elif choice == 'B': app_config['sendBarcode'] = not app_config.get('sendBarcode', True)
+        elif choice == 'A': app_config['aiEnabled'] = not app_config.get('aiEnabled', False)
+        elif choice == 'S': app_config['aiScanEnabled'] = not app_config.get('aiScanEnabled', False)
+        elif choice == 'K':
+            val = input("Enter OpenAI API Key: ").strip()
+            if val: app_config['aiApiKey'] = val
         elif choice == '0':
             # Save to files
             with open(os.path.join(os.path.dirname(__file__), 'config.sys'), 'w') as f: f.write(encode_obf(app_config))
@@ -599,22 +676,29 @@ async def main():
         print(Fore.CYAN + "1. SMTP (from smtp.txt)")
         print(Fore.CYAN + "2. API (aws.sys, brevo.sys, etc.)")
         print(Fore.CYAN + "3. Direct MX (Port 25)")
-        print(Fore.YELLOW + "4. Settings / Configuration Dashboard")
-        print(Fore.YELLOW + "5. Run Connectivity & Proxy Diagnostic")
-        print(Fore.RED + "6. Exit")
+        print(Fore.MAGENTA + "4. AI Letter Crafter (Draft with Prompt)")
+        print(Fore.YELLOW + "5. Settings / Configuration Dashboard")
+        print(Fore.YELLOW + "6. Run Connectivity & Proxy Diagnostic")
+        print(Fore.RED + "7. Exit")
 
-        mode = input(Fore.WHITE + "\nSelect mode (1-6): ").strip()
+        mode = input(Fore.WHITE + "\nSelect mode (1-7): ").strip()
 
         if mode == '4':
-            show_settings_dashboard(app_config, direct_mx_options)
+            if not app_config.get('aiEnabled') or not app_config.get('aiApiKey'):
+                print(Fore.RED + "[!] AI Features disabled or API Key missing.")
+                time.sleep(2); continue
+            await ai_letter_crafter(app_config)
             continue
         elif mode == '5':
+            show_settings_dashboard(app_config, direct_mx_options)
+            continue
+        elif mode == '6':
             proxies = load_files(os.path.join(os.path.dirname(__file__), 'proxies.txt'))
             validate_proxies(proxies)
             check_direct_mx_connectivity(proxies[0] if proxies else None)
             input(Fore.WHITE + "\nDiagnostic complete. Press Enter to return to menu...")
             continue
-        elif mode == '6':
+        elif mode == '7':
             sys.exit(0)
         elif mode in ['1', '2', '3']:
             break
@@ -714,6 +798,9 @@ async def main():
                 link_idx += 1
 
                 content = replace_tags(open(random.choice(letters)).read(), repls)
+
+                if app_config.get('aiEnabled') and app_config.get('aiScanEnabled') and app_config.get('aiApiKey') and idx == 0:
+                    content = await ai_letter_scanner(app_config, content)
                 subject = replace_tags(random.choice(subjects), repls)
                 stats['spam_score'] = evaluate_spam_score(subject, content)
                 stats['current_smtp'] = configs[idx % len(configs)].get('host', configs[idx % len(configs)].get('type'))
