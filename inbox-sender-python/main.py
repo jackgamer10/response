@@ -9,6 +9,7 @@ import random
 import json
 import base64
 import hashlib
+import re
 import smtplib
 import ssl
 import socket
@@ -320,7 +321,7 @@ def validate_proxies(proxy_list):
             url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
             s = socks.socksocket()
             s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
-            s.settimeout(5)
+            s.settimeout(10)
             s.connect(('1.1.1.1', 53))
             s.close()
             valid_proxies.append(proxy_url)
@@ -339,13 +340,13 @@ def check_direct_mx_connectivity(proxy_url=None):
             url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
             s = socks.socksocket()
             s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
-            s.settimeout(5)
+            s.settimeout(10)
             s.connect((test_host, 25))
             s.close()
             print(Fore.GREEN + f"  [OK] Port 25 is reachable via Proxy.")
             stats['port25'] = 'Proxied'
         else:
-            socket.create_connection((test_host, 25), timeout=5)
+            socket.create_connection((test_host, 25), timeout=10)
             print(Fore.GREEN + "  [OK] Outbound Port 25 is open locally.")
             stats['port25'] = 'Open'
     except Exception as e:
@@ -407,6 +408,7 @@ def check_smtp_configs(configs, proxies=None):
                 url = requests.utils.urlparse(current_proxy if '://' in current_proxy else f'socks5://{current_proxy}')
                 socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
                 socket.socket = socks.socksocket
+                socket.setdefaulttimeout(30)
 
             try:
                 if c.get('type') == 'brevo':
@@ -468,7 +470,8 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
         msg['DKIM-Signature'] = sig.decode().split('DKIM-Signature: ')[1]
 
     # Robust timeout conversion (ms to s)
-    raw_timeout = transport_config.get('timeout', 10000)
+    # Defaulting to 30s to prevent common socket timeouts during proxy handshakes
+    raw_timeout = transport_config.get('timeout', 30000)
     timeout_s = raw_timeout / 1000.0 if raw_timeout > 500 else raw_timeout
 
     if transport_config.get('type') == 'aws':
@@ -527,6 +530,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
             socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             socket.socket = socks.socksocket
+            socket.setdefaulttimeout(timeout_s)
 
         try:
             last_err = None
@@ -558,6 +562,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
             url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
             socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             socket.socket = socks.socksocket
+            socket.setdefaulttimeout(timeout_s)
 
         try:
             last_err = None
