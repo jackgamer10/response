@@ -19,7 +19,7 @@ echo [+] Node.js detected.
 echo [+] Installing/Updating dependencies...
 echo.
 
-call npm install systeminformation bwip-js axios node-html-to-image nodemailer randomstring html-pdf-node html-minifier socks-proxy-agent socks @aws-sdk/client-ses nodemailer-mailgun-transport nodemailer-sendgrid-transport @smithy/node-http-handler
+call npm install
 
 if %errorlevel% neq 0 (
     echo.

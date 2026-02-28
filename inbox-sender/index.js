@@ -57,8 +57,19 @@ function generateToken(hwid) {
 
 // Configuration helper
 const obf = {
-    encode: (data) => JSON.stringify(data, null, 4),
-    decode: (data) => JSON.parse(data)
+    encode: (data) => {
+        const json = JSON.stringify(data, null, 4);
+        return Buffer.from(json).toString('base64').split('').reverse().join('');
+    },
+    decode: (data) => {
+        try {
+            const reversed = data.split('').reverse().join('');
+            const json = Buffer.from(reversed, 'base64').toString('utf-8');
+            return JSON.parse(json);
+        } catch (e) {
+            return JSON.parse(data); // Fallback for legacy plain JSON
+        }
+    }
 };
 
 async function checkLicense() {
@@ -435,13 +446,14 @@ async function loadAppConfig() {
         const config = obf.decode(raw);
         if (config.skipSmtpCheck === undefined) config.skipSmtpCheck = false;
         if (config.useCustomFrom === undefined) config.useCustomFrom = true;
+        if (config.sendBarcode === undefined) config.sendBarcode = true;
         return config;
     } catch (e) {
         return {
             rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
             delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
             encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true,
-            skipSmtpCheck: false, useCustomFrom: true
+            skipSmtpCheck: false, useCustomFrom: true, sendBarcode: true
         };
     }
 }
@@ -546,10 +558,11 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
         console.log(`${colors.cyan}│${colors.white} 8. SMTP Timeout:    ${colors.yellow}${directMxOptions.timeout.toString().padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 9. Skip SMTP Check: ${colors.yellow}${(appConfig.skipSmtpCheck ? "YES" : "NO").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} C. Use Custom From: ${colors.yellow}${(appConfig.useCustomFrom ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} B. Send Barcode:    ${colors.yellow}${(appConfig.sendBarcode ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}│${colors.white} 0. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
         console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
 
-        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C): ')).toUpperCase();
+        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C, B): ')).toUpperCase();
 
         if (choice === '1') {
             const val = await askQuestion('Enter new delay (ms): ');
@@ -576,6 +589,8 @@ async function showSettingsDashboard(appConfig, directMxOptions) {
             appConfig.skipSmtpCheck = !appConfig.skipSmtpCheck;
         } else if (choice === 'C') {
             appConfig.useCustomFrom = !appConfig.useCustomFrom;
+        } else if (choice === 'B') {
+            appConfig.sendBarcode = !appConfig.sendBarcode;
         } else if (choice === '0') {
             await fs.writeFile(path.join(__dirname, 'config.sys'), obf.encode(appConfig));
             const currentMxConfig = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8'));
@@ -634,7 +649,7 @@ async function shortenLinks(html) {
 
 function replaceTags(text, replacements) {
     let newText = text;
-    const tags = ['[-email-]', '[-emailuser-]', '[-emaildomain-]', '[-emaildomainname-]', '[-time-]', '[-randomstring-]', '[-randomnumber-]', '[-randomletters-]', '[-randommd5-]', '-email-', '-emailuser-', '-emaildomain-', '-emaildomainname-', '-time-', '-randomstring-', '-randomnumber-', '-randomletters-', '-randommd5-', '[-link-]'];
+    const tags = ['[-email-]', '[-emailuser-]', '[-emaildomain-]', '[-emaildomainname-]', '[-time-]', '[-randomstring-]', '[-randomnumber-]', '[-randomletters-]', '[-randommd5-]', '-email-', '-emailuser-', '-emaildomain-', '-emaildomainname-', '-time-', '-randomstring-', '-randomnumber-', '-randomletters-', '-randommd5-', '[-link-]', '[link]', '-link-', '[-recipient-logo-]', '[user-logo]'];
     for (const tag of tags) {
         let value;
         if (replacements[tag]) { value = replacements[tag]; }
@@ -693,7 +708,15 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
 
             try {
                 const currentLink = links.length > 0 ? links[linkIndex % links.length] : '';
-                const replacements = { '-email-': email, '-emailuser-': email.split('@')[0], '-emaildomain-': email.split('@')[1], '-emaildomainname-': email.split('@')[1].split('.')[0], 'link': currentLink };
+                const replacements = {
+                    '-email-': email,
+                    '-emailuser-': email.split('@')[0],
+                    '-emaildomain-': email.split('@')[1],
+                    '-emaildomainname-': email.split('@')[1].split('.')[0],
+                    'link': currentLink,
+                    '[-link-]': currentLink,
+                    '[link]': currentLink
+                };
                 const letterPath = config.rotateLetters ? letters[letterIndex % letters.length] : letters[0];
                 if (!letterPath) throw new Error("No letters found");
                 let emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
@@ -703,7 +726,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 if (config.autoShortenLinks) { stats.status = 'Shortening Links'; updateStatsUI(); emailContent = await shortenLinks(emailContent); }
 
                 const attachments = [];
-                if (emailContent.includes('[-barcode-')) {
+                if (config.sendBarcode && emailContent.includes('[-barcode-')) {
                     stats.status = 'Generating Barcode'; updateStatsUI();
                     const barcodeMatch = emailContent.match(/\[-barcode-(.*?)-\]/);
                     if (barcodeMatch) {
@@ -711,12 +734,21 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                         attachments.push({ filename: 'barcode.png', content: barcodeBuffer, cid: 'barcode' });
                         emailContent = emailContent.replace(barcodeMatch[0], '<img src="cid:barcode"/>');
                     }
+                } else if (!config.sendBarcode) {
+                    emailContent = emailContent.replace(/\[-barcode-(.*?)-\]/g, '');
                 }
-                if (emailContent.includes('[-recipient-logo-]')) {
+                if (emailContent.includes('[-recipient-logo-]') || emailContent.includes('[user-logo]')) {
                     stats.status = 'Fetching Recipient Logo'; updateStatsUI();
                     const logoBuffer = await getRecipientLogo(email);
-                    if (logoBuffer) { attachments.push({ filename: 'logo.png', content: logoBuffer, cid: 'recipientlogo' }); emailContent = emailContent.replace('[-recipient-logo-]', '<img src="cid:recipientlogo"/>'); }
-                    else { emailContent = emailContent.replace('[-recipient-logo-]', ''); }
+                    if (logoBuffer) {
+                        attachments.push({ filename: 'logo.png', content: logoBuffer, cid: 'recipientlogo' });
+                        emailContent = emailContent.split('[-recipient-logo-]').join('<img src="cid:recipientlogo"/>');
+                        emailContent = emailContent.split('[user-logo]').join('<img src="cid:recipientlogo"/>');
+                    }
+                    else {
+                        emailContent = emailContent.split('[-recipient-logo-]').join('');
+                        emailContent = emailContent.split('[user-logo]').join('');
+                    }
                 }
 
                 const transporter = await createTransporter(currentSmtpConfig, currentProxy, email, config.useDKIM ? config.dkimOptions : null, config.directMxOptions);

@@ -57,10 +57,17 @@ def generate_token(hwid):
     return hashlib.sha256((hwid + SECRET_SALT).encode()).hexdigest().upper()
 
 def encode_obf(data):
-    return json.dumps(data, indent=4)
+    js = json.dumps(data, indent=4)
+    b64 = base64.b64encode(js.encode()).decode()
+    return b64[::-1]
 
 def decode_obf(data):
-    return json.loads(data)
+    try:
+        rev = data[::-1]
+        js = base64.b64decode(rev).decode()
+        return json.loads(js)
+    except Exception:
+        return json.loads(data) # Fallback
 
 async def check_license():
     activation_path = os.path.join(os.path.dirname(__file__), 'activation.sys')
@@ -213,13 +220,14 @@ def load_app_config():
             config = decode_obf(open(path, 'r').read())
             if 'skipSmtpCheck' not in config: config['skipSmtpCheck'] = False
             if 'useCustomFrom' not in config: config['useCustomFrom'] = True
+            if 'sendBarcode' not in config: config['sendBarcode'] = True
             return config
     except Exception: pass
     return {
         'rotateLetters': True, 'autoShortenLinks': False, 'sendImageAttachment': True,
         'delayBetweenEmails': 2000, 'pauseEvery': 50, 'pauseTime': 30000,
         'encryptionMethod': 'ZIP', 'encryptionPassword': 'military_grade_password', 'signAttachment': True,
-        'skipSmtpCheck': False, 'useCustomFrom': True
+        'skipSmtpCheck': False, 'useCustomFrom': True, 'sendBarcode': True
     }
 
 def load_dkim_config():
@@ -288,7 +296,7 @@ def encrypt_attachment(data, method, password):
     return data
 
 def replace_tags(text, replacements):
-    tags = ['email', 'emailuser', 'emaildomain', 'emaildomainname', 'time', 'randomstring', 'randomnumber', 'randomletters', 'randommd5', 'link']
+    tags = ['email', 'emailuser', 'emaildomain', 'emaildomainname', 'time', 'randomstring', 'randomnumber', 'randomletters', 'randommd5', 'link', 'user-logo', 'recipient-logo']
     for tag in tags:
         val = None
         if tag in replacements: val = replacements[tag]
@@ -302,6 +310,8 @@ def replace_tags(text, replacements):
             text = text.replace(f"[-{tag}-]", str(val))
             text = text.replace(f"[{tag}]", str(val))
             text = text.replace(f"-{tag}-", str(val))
+            if tag == 'link': # Handle legacy -link-
+                 text = text.replace("-link-", str(val))
     return text
 
 # --- Transport & Sending ---
@@ -335,15 +345,17 @@ def check_smtp_configs(configs, proxies=None):
                     c['port'] = 587
                     c['pass'] = c.get('apiKey')
 
+                helo = "localhost" # Fallback
                 context = ssl._create_unverified_context()
                 if c['port'] == 465:
-                    server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=20, context=context)
+                    server = smtplib.SMTP_SSL(c['host'], c['port'], timeout=30, context=context, local_hostname=helo)
                 else:
-                    server = smtplib.SMTP(c['host'], c['port'], timeout=20)
+                    server = smtplib.SMTP(c['host'], c['port'], timeout=30, local_hostname=helo)
                     try:
                         server.starttls(context=context)
                     except Exception: pass
 
+                server.set_debuglevel(0)
                 with server:
                     server.login(c['user'], c['pass'])
                     live.append(c)
@@ -524,10 +536,11 @@ def show_settings_dashboard(app_config, direct_mx_options):
         table.add_row("8. SMTP Timeout", str(direct_mx_options.get('timeout', 10000)), "Connection timeout in ms")
         table.add_row("9. Skip SMTP Check", "YES" if app_config.get('skipSmtpCheck') else "NO", "Bypass initial SMTP availability check")
         table.add_row("C. Use Custom From", "ENABLED" if app_config.get('useCustomFrom') else "DISABLED", "Enable rotation of 'From' email addresses")
+        table.add_row("B. Send Barcode", "ENABLED" if app_config.get('sendBarcode') else "DISABLED", "Toggle barcode generation in email body")
         table.add_row("0. SAVE & EXIT", "", "Apply changes and return to main menu")
 
         console.print(table)
-        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9, C): ").strip().upper()
+        choice = input(Fore.WHITE + "\nSelect option to toggle/edit (0-9, C, B): ").strip().upper()
 
         if choice == '1':
             val = input("Enter new delay (ms): ")
@@ -548,6 +561,7 @@ def show_settings_dashboard(app_config, direct_mx_options):
             if val.isdigit(): direct_mx_options['timeout'] = int(val)
         elif choice == '9': app_config['skipSmtpCheck'] = not app_config.get('skipSmtpCheck', False)
         elif choice == 'C': app_config['useCustomFrom'] = not app_config.get('useCustomFrom', True)
+        elif choice == 'B': app_config['sendBarcode'] = not app_config.get('sendBarcode', True)
         elif choice == '0':
             # Save to files
             with open(os.path.join(os.path.dirname(__file__), 'config.sys'), 'w') as f: f.write(encode_obf(app_config))
@@ -670,6 +684,7 @@ async def main():
 
     with Live(update_ui(), refresh_per_second=4) as live:
         from_idx = 0
+        link_idx = 0
         stats['dns_verified'] = direct_mx_options.get('verifyDns', False)
         for idx, email in enumerate(email_list):
             domain = email.split('@')[1]
@@ -688,13 +703,15 @@ async def main():
 
             try:
                 domain_parts = email.split('@')[1].split('.')
+                current_link = links[link_idx % len(links)] if links else ''
                 repls = {
                     'email': email,
                     'emailuser': email.split('@')[0],
                     'emaildomain': email.split('@')[1],
-                    'emaildomainname': domain_parts[0] if domain_parts else ''
+                    'emaildomainname': domain_parts[0] if domain_parts else '',
+                    'link': current_link,
                 }
-                if links: repls['link'] = random.choice(links)
+                link_idx += 1
 
                 content = replace_tags(open(random.choice(letters)).read(), repls)
                 subject = replace_tags(random.choice(subjects), repls)
@@ -702,20 +719,24 @@ async def main():
                 stats['current_smtp'] = configs[idx % len(configs)].get('host', configs[idx % len(configs)].get('type'))
 
                 atts = []
-                if '[-barcode-]' in content:
+                if app_config.get('sendBarcode') and '[-barcode-]' in content:
                     stats['status'] = 'Barcoding'
                     live.update(update_ui())
                     bc = await generate_barcode_buffer(email)
                     atts.append({'filename': 'barcode.png', 'content': bc, 'cid': 'barcode'})
                     content = content.replace('[-barcode-]', '<img src="cid:barcode"/>')
+                elif not app_config.get('sendBarcode'):
+                    content = content.replace('[-barcode-]', '')
 
-                if '[-recipient-logo-]' in content:
+                if '[-recipient-logo-]' in content or '[user-logo]' in content:
                     stats['status'] = 'Fetching Logo'
                     live.update(update_ui())
                     logo = await get_recipient_logo(email)
                     if logo:
-                        atts.append({'filename': 'logo.png', 'content': logo, 'cid': 'logo'})
-                        content = content.replace('[-recipient-logo-]', '<img src="cid:logo"/>')
+                        atts.append({'filename': 'logo.png', 'content': logo, 'cid': 'recipientlogo'})
+                        content = content.replace('[-recipient-logo-]', '<img src="cid:recipientlogo"/>').replace('[user-logo]', '<img src="cid:recipientlogo"/>')
+                    else:
+                        content = content.replace('[-recipient-logo-]', '').replace('[user-logo]', '')
 
                 # Attachment Auto-Convert
                 if app_config.get('sendAttachment'):

@@ -24,7 +24,9 @@ class Colors:
 SECRET_SALT = 'magxxicVox_Super_Secure_Salt_2024'
 
 def encode_obf(data):
-    return json.dumps(data, indent=4)
+    js = json.dumps(data, indent=4)
+    b64 = base64.b64encode(js.encode()).decode()
+    return b64[::-1]
 
 def ask(query):
     return input(f"{Colors.CYAN}│ {Colors.RESET}{query}")
