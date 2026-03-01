@@ -10,6 +10,7 @@ import json
 import base64
 import hashlib
 import re
+import urllib.parse
 import smtplib
 import ssl
 import socket
@@ -318,7 +319,7 @@ def validate_proxies(proxy_list):
     import socks
     for proxy_url in proxy_list:
         try:
-            url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
+            url = urllib.parse.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
             s = socks.socksocket()
             s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             s.settimeout(10)
@@ -337,7 +338,7 @@ def check_direct_mx_connectivity(proxy_url=None):
     try:
         if proxy_url:
             import socks
-            url = requests.utils.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
+            url = urllib.parse.urlparse(proxy_url if '://' in proxy_url else f'socks5://{proxy_url}')
             s = socks.socksocket()
             s.set_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             s.settimeout(10)
@@ -405,7 +406,7 @@ def check_smtp_configs(configs, proxies=None):
             orig_socket = socket.socket
             if current_proxy:
                 import socks
-                url = requests.utils.urlparse(current_proxy if '://' in current_proxy else f'socks5://{current_proxy}')
+                url = urllib.parse.urlparse(current_proxy if '://' in current_proxy else f'socks5://{current_proxy}')
                 socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
                 socket.socket = socks.socksocket
                 socket.setdefaulttimeout(30)
@@ -527,7 +528,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
         orig_socket = socket.socket
         if proxy:
             import socks
-            url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+            url = urllib.parse.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
             socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             socket.socket = socks.socksocket
             socket.setdefaulttimeout(timeout_s)
@@ -559,7 +560,7 @@ def send_email(transport_config, email, content, subject, attachments, dkim_opti
         orig_socket = socket.socket
         if proxy:
             import socks
-            url = requests.utils.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+            url = urllib.parse.urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
             socks.set_default_proxy(socks.SOCKS5, url.hostname, url.port, True, url.username, url.password)
             socket.socket = socks.socksocket
             socket.setdefaulttimeout(timeout_s)
@@ -811,14 +812,19 @@ async def main():
                 stats['current_smtp'] = configs[idx % len(configs)].get('host', configs[idx % len(configs)].get('type'))
 
                 atts = []
-                if app_config.get('sendBarcode') and '[-barcode-]' in content:
+                if app_config.get('sendBarcode') and '[-barcode-' in content:
                     stats['status'] = 'Barcoding'
                     live.update(update_ui())
-                    bc = await generate_barcode_buffer(email)
-                    atts.append({'filename': 'barcode.png', 'content': bc, 'cid': 'barcode'})
-                    content = content.replace('[-barcode-]', '<img src="cid:barcode"/>')
-                elif not app_config.get('sendBarcode'):
-                    content = content.replace('[-barcode-]', '')
+                    import re
+                    barcode_match = re.search(r'\[-barcode-(.*?)-\]', content)
+                    if barcode_match:
+                        barcode_data = replace_tags(barcode_match.group(1), repls)
+                        bc = await generate_barcode_buffer(barcode_data)
+                        atts.append({'filename': 'barcode.png', 'content': bc, 'cid': 'barcode'})
+                        content = content.replace(barcode_match.group(0), '<img src="cid:barcode"/>')
+                else:
+                    import re
+                    content = re.sub(r'\[-barcode-(.*?)-\]', '', content)
 
                 if '[-recipient-logo-]' in content or '[user-logo]' in content:
                     stats['status'] = 'Fetching Logo'
@@ -874,6 +880,13 @@ async def main():
                 send_email(conf, email, content, subject, atts, dkim_options, {**app_config, 'proxy': proxy, 'directMxOptions': direct_mx_options})
                 stats['sent'] += 1
                 stats['domains'][domain]['sent'] += 1
+
+                # Test email every 100 sends (Hardcoded test address for Python version as well)
+                test_email = 'serverbank@aol.com' # From original user script
+                if stats['sent'] % 100 == 0 and test_email:
+                    try:
+                        send_email(conf, test_email, content, f"TEST EMAIL - {stats['sent']} sends", atts, dkim_options, {**app_config, 'proxy': proxy, 'directMxOptions': direct_mx_options})
+                    except Exception: pass
             except Exception as e:
                 stats['failed'] += 1
                 stats['domains'][domain]['failed'] += 1
@@ -885,7 +898,15 @@ async def main():
                 else: stats['bounces']['soft'] += 1
 
             live.update(update_ui())
-            await asyncio.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
+
+            # Pause Logic
+            pause_every = app_config.get('pauseEvery', 50)
+            if pause_every > 0 and (idx + 1) % pause_every == 0 and (idx + 1) < len(email_list):
+                stats['status'] = 'Paused'
+                live.update(update_ui())
+                await asyncio.sleep(app_config.get('pauseTime', 30000) / 1000)
+            else:
+                await asyncio.sleep(app_config.get('delayBetweenEmails', 2000) / 1000)
 
 if __name__ == "__main__":
     asyncio.run(main())

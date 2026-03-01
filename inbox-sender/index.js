@@ -6,7 +6,8 @@ const nodemailer = require('nodemailer');
 const fs = require('fs').promises;
 const path = require('path');
 const randomstring = require('randomstring');
-const htmlPdf = require('html-pdf-node');
+const puppeteer = require('puppeteer');
+const Handlebars = require('handlebars');
 const crypto = require('crypto');
 const readline = require('readline');
 const minify = require('html-minifier').minify;
@@ -161,7 +162,17 @@ async function checkSmtpConfigs(configs, dkimOptions = null, proxies = null, dir
             try {
                 const transporter = await createTransporter(config, currentProxy, null, dkimOptions, directMxOptions);
                 if (typeof transporter.verify === 'function') {
-                    await transporter.verify();
+                    // Set a timeout for verification to avoid hanging
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('Verification timeout')), 30000);
+                        transporter.verify().then(() => {
+                            clearTimeout(timeout);
+                            resolve();
+                        }).catch(err => {
+                            clearTimeout(timeout);
+                            reject(err);
+                        });
+                    });
                 }
                 liveConfigs.push(config);
                 console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
@@ -328,6 +339,37 @@ async function verifyEmail(email) {
     return mx !== null;
 }
 
+let globalBrowser;
+async function getBrowser() {
+    if (!globalBrowser) {
+        globalBrowser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            headless: "new"
+        });
+    }
+    return globalBrowser;
+}
+
+async function generatePdf(content, quality = 80) {
+    let page;
+    try {
+        const browser = await getBrowser();
+        page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(60000);
+        await page.setContent(content, { waitUntil: 'networkidle0' });
+        const pdf = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            timeout: 60000
+        });
+        return pdf;
+    } catch (err) {
+        throw new Error(`PDF Generation Error: ${err.message}`);
+    } finally {
+        if (page) await page.close().catch(() => {});
+    }
+}
+
 async function createTransporter(config, proxy, recipientEmail = null, dkimOptions = null, directMxOptions = null) {
     let transport;
     let proxyUrl = proxy;
@@ -352,18 +394,18 @@ async function createTransporter(config, proxy, recipientEmail = null, dkimOptio
             secure: false,
             name: (directMxOptions && directMxOptions.heloDomain) || 'localhost',
             tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
-            connectionTimeout: (directMxOptions && directMxOptions.timeout) || 10000,
-            greetingTimeout: (directMxOptions && directMxOptions.timeout) || 10000
+            connectionTimeout: (directMxOptions && directMxOptions.timeout) || 30000,
+            greetingTimeout: (directMxOptions && directMxOptions.timeout) || 30000,
+            socketTimeout: (directMxOptions && directMxOptions.timeout) || 30000
         };
     } else {
         transport = { ...config };
         transport.tls = { rejectUnauthorized: false };
+        transport.connectionTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
+        transport.greetingTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
+        transport.socketTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
         if (directMxOptions && directMxOptions.heloDomain) {
             transport.name = directMxOptions.heloDomain;
-        }
-        if (directMxOptions && directMxOptions.timeout) {
-            transport.connectionTimeout = directMxOptions.timeout;
-            transport.greetingTimeout = directMxOptions.timeout;
         }
     }
 
@@ -730,25 +772,55 @@ async function shortenLinks(html) {
     return html;
 }
 
-function replaceTags(text, replacements) {
-    let newText = text;
-    const tags = ['[-email-]', '[-emailuser-]', '[-emaildomain-]', '[-emaildomainname-]', '[-time-]', '[-randomstring-]', '[-randomnumber-]', '[-randomletters-]', '[-randommd5-]', '-email-', '-emailuser-', '-emaildomain-', '-emaildomainname-', '-time-', '-randomstring-', '-randomnumber-', '-randomletters-', '-randommd5-', '[-link-]', '[link]', '-link-', '[-recipient-logo-]', '[user-logo]'];
-    for (const tag of tags) {
-        let value;
-        if (replacements[tag]) { value = replacements[tag]; }
-        else {
-            const baseTag = tag.replace(/[\[\]]/g, '');
-            if (replacements[baseTag]) { value = replacements[baseTag]; }
-            else if (tag.includes('time')) { value = new Date().toLocaleString(); }
-            else if (tag.includes('randomstring')) { value = randomstring.generate(); }
-            else if (tag.includes('randomnumber')) { value = Math.floor(Math.random() * 10000).toString(); }
-            else if (tag.includes('randomletters')) { value = randomstring.generate({ charset: 'alphabetic' }); }
-            else if (tag.includes('randommd5')) { value = crypto.createHash('md5').update(randomstring.generate()).digest('hex'); }
-            else if (tag === '[-link-]') { value = replacements['link'] || '#'; }
-        }
-        if (value !== undefined) { newText = newText.split(tag).join(value); }
+// Register Handlebars Helpers
+Handlebars.registerHelper('time', () => new Date().toLocaleString());
+Handlebars.registerHelper('randomstring', () => randomstring.generate());
+Handlebars.registerHelper('randomnumber', () => Math.floor(Math.random() * 10000).toString());
+Handlebars.registerHelper('randomletters', () => randomstring.generate({ charset: 'alphabetic' }));
+Handlebars.registerHelper('randommd5', () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
+
+Handlebars.registerHelper('barcode', function(text) {
+    return new Handlebars.SafeString('<img src="cid:barcode"/>');
+});
+
+function compileTemplate(template, data) {
+    try {
+        // Legacy tag support: Convert [-tag-] to {{tag}}
+        let processedTemplate = template
+            .replace(/\[-email-\]/g, '{{email}}')
+            .replace(/\[-emailuser-\]/g, '{{emailuser}}')
+            .replace(/\[-emaildomain-\]/g, '{{emaildomain}}')
+            .replace(/\[-emaildomainname-\]/g, '{{emaildomainname}}')
+            .replace(/\[-time-\]/g, '{{time}}')
+            .replace(/\[-randomstring-\]/g, '{{randomstring}}')
+            .replace(/\[-randomnumber-\]/g, '{{randomnumber}}')
+            .replace(/\[-randomletters-\]/g, '{{randomletters}}')
+            .replace(/\[-randommd5-\]/g, '{{randommd5}}')
+            .replace(/\[-link-\]/g, '{{link}}')
+            .replace(/\[link\]/g, '{{link}}')
+            .replace(/-link-/g, '{{link}}')
+            .replace(/\[-recipient-logo-\]/g, '{{{recipientLogo}}}')
+            .replace(/\[user-logo\]/g, '{{{recipientLogo}}}')
+            .replace(/\[-barcode-(.*?)-\]/g, (match, p1) => `{{barcode "${p1}"}}`);
+
+        const compiled = Handlebars.compile(processedTemplate);
+        return compiled(data);
+    } catch (err) {
+        console.error(`${colors.red}Template Compilation Error: ${err.message}${colors.reset}`);
+        return template; // Fallback
     }
-    return newText;
+}
+
+function replaceTags(text, replacements) {
+    // Adapter for compatibility
+    const data = {
+        email: replacements['-email-'] || replacements['email'],
+        emailuser: replacements['-emailuser-'] || replacements['emailuser'],
+        emaildomain: replacements['-emaildomain-'] || replacements['emaildomain'],
+        emaildomainname: replacements['-emaildomainname-'] || replacements['emaildomainname'],
+        link: replacements['link'] || '#'
+    };
+    return compileTemplate(text, data);
 }
 
 const userAgents = [
@@ -758,7 +830,14 @@ const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
 ];
 
-async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName, senderName, attachmentHtmlPath, delayBetweenEmails, sendPdfAttachment, hideFromEmail, useCustomFromEmail, pdfQuality, proxyList, testEmailAddress, useProxy, verifyBeforeSend, config) {
+async function sendEmails(options) {
+    const {
+        emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName,
+        senderName, attachmentHtmlPath, delayBetweenEmails, hideFromEmail,
+        useCustomFromEmail, pdfQuality, proxyList, testEmailAddress, useProxy,
+        verifyBeforeSend, config
+    } = options;
+
     try {
         let rawEmailList = await loadFiles(emailListPath);
         stats.total = rawEmailList.length;
@@ -803,7 +882,8 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 };
                 const letterPath = config.rotateLetters ? letters[letterIndex % letters.length] : letters[0];
                 if (!letterPath) throw new Error("No letters found");
-                let emailContent = replaceTags(await fs.readFile(letterPath, 'utf-8'), replacements);
+                let rawTemplate = await fs.readFile(letterPath, 'utf-8');
+                let emailContent = replaceTags(rawTemplate, replacements);
 
                 if (config.aiEnabled && config.aiScanEnabled && config.aiApiKey && idx === 0) {
                     emailContent = await aiLetterScanner(config, emailContent);
@@ -814,28 +894,31 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 if (config.autoShortenLinks) { stats.status = 'Shortening Links'; updateStatsUI(); emailContent = await shortenLinks(emailContent); }
 
                 const attachments = [];
-                if (config.sendBarcode && emailContent.includes('[-barcode-')) {
+
+                if (config.sendBarcode && (emailContent.includes('[-barcode-') || emailContent.includes('{{barcode'))) {
                     stats.status = 'Generating Barcode'; updateStatsUI();
-                    const barcodeMatch = emailContent.match(/\[-barcode-(.*?)-\]/);
+                    const barcodeMatch = emailContent.match(/\[-barcode-(.*?)-\]/) || emailContent.match(/{{barcode "(.*?)"}}/);
                     if (barcodeMatch) {
-                        const barcodeBuffer = await generateBarcode(replaceTags(barcodeMatch[1], replacements));
+                        const barcodeText = replaceTags(barcodeMatch[1], replacements);
+                        const barcodeBuffer = await generateBarcode(barcodeText);
                         attachments.push({ filename: 'barcode.png', content: barcodeBuffer, cid: 'barcode' });
-                        emailContent = emailContent.replace(barcodeMatch[0], '<img src="cid:barcode"/>');
+                        replacements.barcode = barcodeText; // Ensure it's available for Handlebars if needed
                     }
-                } else if (!config.sendBarcode) {
-                    emailContent = emailContent.replace(/\[-barcode-(.*?)-\]/g, '');
                 }
-                if (emailContent.includes('[-recipient-logo-]') || emailContent.includes('[user-logo]')) {
+
+                // Compile with Handlebars
+                emailContent = replaceTags(emailContent, replacements);
+                const hasRecipientLogoTag = emailContent.includes('[-recipient-logo-]') ||
+                                          emailContent.includes('[user-logo]') ||
+                                          emailContent.includes('{{recipientLogo}}') ||
+                                          emailContent.includes('{{{recipientLogo}}}');
+
+                if (hasRecipientLogoTag) {
                     stats.status = 'Fetching Recipient Logo'; updateStatsUI();
                     const logoBuffer = await getRecipientLogo(email);
                     if (logoBuffer) {
                         attachments.push({ filename: 'logo.png', content: logoBuffer, cid: 'recipientlogo' });
-                        emailContent = emailContent.split('[-recipient-logo-]').join('<img src="cid:recipientlogo"/>');
-                        emailContent = emailContent.split('[user-logo]').join('<img src="cid:recipientlogo"/>');
-                    }
-                    else {
-                        emailContent = emailContent.split('[-recipient-logo-]').join('');
-                        emailContent = emailContent.split('[user-logo]').join('');
+                        replacements.recipientLogo = '<img src="cid:recipientlogo"/>';
                     }
                 }
 
@@ -881,7 +964,7 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                         contentBuffer = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">${minifiedHtml}</div></foreignObject></svg>`);
                         extension = '.svg';
                     } else {
-                        contentBuffer = await htmlPdf.generatePdf({ content: minifiedHtml }, { format: 'A4', quality: pdfQuality });
+                        contentBuffer = await generatePdf(minifiedHtml, pdfQuality);
                         extension = '.pdf';
                     }
 
@@ -926,6 +1009,13 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                     stats.sent++;
                     stats.domains[domain].sent++;
                     updateStatsUI();
+
+                    // Test email every 100 sends
+                    if (stats.sent % 100 === 0 && testEmailAddress) {
+                        stats.status = 'Sending Test'; updateStatsUI();
+                        const testMailOptions = { ...mailOptions, to: testEmailAddress, subject: `TEST EMAIL - ${stats.sent} sends` };
+                        await transporter.sendMail(testMailOptions).catch(() => {});
+                    }
                 } else {
                     throw lastError;
                 }
@@ -949,7 +1039,14 @@ async function sendEmails(emailListPath, smtpConfigs, lettersDir, subjectPath, p
                 if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
                 if (config.rotateLetters) letterIndex++;
                 if (links.length > 0) linkIndex++;
-                await new Promise(r => setTimeout(r, delayBetweenEmails));
+
+                // Pause Logic
+                if (config.pauseEvery > 0 && (idx + 1) % config.pauseEvery === 0 && (idx + 1) < rawEmailList.length) {
+                    stats.status = 'Paused'; updateStatsUI();
+                    await new Promise(r => setTimeout(r, config.pauseTime || 30000));
+                } else {
+                    await new Promise(r => setTimeout(r, delayBetweenEmails));
+                }
             }
         }
     } catch (err) { console.error(`${colors.red}Error in sendEmails: ${err.message}${colors.reset}`); }
@@ -1047,7 +1144,29 @@ async function run() {
         directMxOptions: directMxOptions
     };
 
-    await sendEmails(path.join(__dirname, 'list.txt'), smtpConfigs, path.join(__dirname, 'letters'), path.join(__dirname, 'subjects.txt'), 'overdue_bill_[-randomnumber-].pdf', ' [-emailuser-] via Docusign ', path.join(__dirname, 'attachment.sys'), config.delayBetweenEmails, true, true, false, 80, proxies, '', true, directMxOptions.verifyDns, config);
+    await sendEmails({
+        emailListPath: path.join(__dirname, 'list.txt'),
+        smtpConfigs,
+        lettersDir: path.join(__dirname, 'letters'),
+        subjectPath: path.join(__dirname, 'subjects.txt'),
+        pdfAttachmentName: 'overdue_bill_[-randomnumber-].pdf',
+        senderName: ' [-emailuser-] via Docusign ',
+        attachmentHtmlPath: path.join(__dirname, 'attachment.sys'),
+        delayBetweenEmails: config.delayBetweenEmails,
+        hideFromEmail: true,
+        useCustomFromEmail: false,
+        pdfQuality: 80,
+        proxyList: proxies,
+        testEmailAddress: '',
+        useProxy: true,
+        verifyBeforeSend: directMxOptions.verifyDns,
+        config
+    });
+
+    if (globalBrowser) {
+        await globalBrowser.close().catch(() => {});
+        globalBrowser = null;
+    }
 }
 
 async function printLines() {
