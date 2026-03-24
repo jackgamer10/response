@@ -17,7 +17,8 @@ const chalk = require('chalk');
 let stats = {
     sent: 0,
     success: 0,
-    failed: 0
+    failed: 0,
+    currentProxy: 'None'
 };
 
 // Configuration & Toggles
@@ -41,7 +42,8 @@ const CONFIG = {
     encryptionPassword: 'MaghxSecurePassword',
     signAttachment: true, // SHA-256 .sig file
     minifyHtml: true,
-    useCustomFromEmail: true
+    useCustomFromEmail: true,
+    retryAttempts: 3
 };
 
 function askQuestion(query) {
@@ -107,7 +109,6 @@ async function checkLicense() {
         if (enteredToken.trim().toUpperCase() === expectedToken) {
             console.log(chalk.green('✔ Token validated. Activating...'));
             await fs.writeFile(activationFile, obfuscate(enteredToken.trim().toUpperCase()));
-            // Hide file on Windows
             if (process.platform === 'win32') {
                 const { exec } = require('child_process');
                 exec(`attrib +h ${activationFile}`);
@@ -143,10 +144,9 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `, 500, chalk.magenta.bold);
-    await printWithDelay('[+] MagxxicVOT XII v1.0', 500, chalk.blue.bold);
-    await printWithDelay('[+] Military-Grade MIME & Proxy Protection', 500, chalk.blue);
+    await printWithDelay('[+] MagxxicVOT XII v1.1', 500, chalk.blue.bold);
+    await printWithDelay('[+] Military-Grade MIME & Proxy Rotation', 500, chalk.blue);
     await printWithDelay('[+] Advanced Content & Attachment Shield', 500, chalk.blue);
-    await printWithDelay('[+] Configuration Checked & Locked', 500, chalk.blue);
 }
 
 async function validateProxies(proxies) {
@@ -188,27 +188,19 @@ async function generateBarcode(data) {
 
 async function replaceTags(text, replacements) {
     let content = text;
-
-    // Static Tags
     content = content.replace(/\[-email-\]/g, replacements['-email-'] || '');
     content = content.replace(/\[-emailuser-\]/g, replacements['-emailuser-'] || '');
     content = content.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-'] || '');
     content = content.replace(/\[-emaildomainname-\]/g, replacements['-emaildomainname-'] || '');
     content = content.replace(/\[-link-\]/g, replacements['-link-'] || '');
-
-    // Dynamic Tags
     content = content.replace(/\[-randomstring-\]/g, () => randomstring.generate());
     content = content.replace(/\[-randomnumber-\]/g, () => Math.floor(1000 + Math.random() * 9000).toString());
     content = content.replace(/\[-randomletters-\]/g, () => randomstring.generate({ charset: 'alphabetic' }));
     content = content.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
     content = content.replace(/\[-time-\]/g, () => new Date().toLocaleString());
-
-    // Recipient Logo Tag
     const domain = replacements['-emaildomain-'] || (replacements['-email-'] ? replacements['-email-'].split('@')[1] : '');
     const logoUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
     content = content.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
-
-    // Barcode Tag: [-barcode-DATA-]
     const barcodeRegex = /\[-barcode-(.*?)-\]/g;
     const matches = [...content.matchAll(barcodeRegex)];
     for (const match of matches) {
@@ -216,7 +208,6 @@ async function replaceTags(text, replacements) {
         const barcodeBase64 = await generateBarcode(barcodeData);
         content = content.replace(match[0], `<img src="data:image/png;base64,${barcodeBase64}" alt="Barcode">`);
     }
-
     return content;
 }
 
@@ -262,13 +253,14 @@ async function loadSmtp(filePath) {
 }
 
 function updateDashboard() {
-    process.stdout.write('\x1Bc'); // Clear console
+    process.stdout.write('\x1Bc');
     console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
     console.log(chalk.cyan('│             ') + chalk.magenta.bold('MAGXXICVOT XII LIVE DASHBOARD') + chalk.cyan('         │'));
     console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
     console.log(chalk.cyan('│ ') + chalk.white('Sent      : ') + chalk.yellow(stats.sent.toString().padEnd(38)) + chalk.cyan(' │'));
     console.log(chalk.cyan('│ ') + chalk.white('Success   : ') + chalk.green(stats.success.toString().padEnd(38)) + chalk.cyan(' │'));
     console.log(chalk.cyan('│ ') + chalk.white('Failed    : ') + chalk.red(stats.failed.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Proxy     : ') + chalk.blue(stats.currentProxy.padEnd(38)) + chalk.cyan(' │'));
     console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
     console.log(chalk.cyan('│ ') + chalk.white('Status    : ') + chalk.blue('Mailing in progress...') + chalk.cyan('                │'));
     console.log(chalk.cyan('└───────────────────────────────────────────────────┘'));
@@ -297,105 +289,117 @@ async function sendEmails() {
         let letterIndex = 0;
 
         for (const email of emailList) {
-            try {
-                const currentSmtpConfig = smtpConfigs[smtpIndex];
-                const currentProxy = proxies.length > 0 ? proxies[proxyIndex] : null;
-                const currentSubject = subjects.length > 0 ? subjects[subjectIndex] : 'Security Update';
-                const currentLink = links.length > 0 ? links[linkIndex] : '';
-                const currentLetterFile = letterFiles.length > 0 ? path.join(CONFIG.lettersDir, letterFiles[letterIndex]) : null;
+            let attempts = 0;
+            let sent = false;
 
-                const replacements = {
-                    '-email-': email,
-                    '-emailuser-': email.split('@')[0],
-                    '-emaildomain-': email.split('@')[1],
-                    '-emaildomainname-': email.split('@')[1].split('.')[0],
-                    '-link-': currentLink
-                };
+            while (attempts < CONFIG.retryAttempts && !sent) {
+                try {
+                    const currentSmtpConfig = smtpConfigs[smtpIndex];
+                    const currentProxy = proxies.length > 0 ? proxies[proxyIndex] : null;
+                    stats.currentProxy = currentProxy || 'Direct';
+                    updateDashboard();
 
-                let htmlContent = currentLetterFile ? await fs.readFile(currentLetterFile, 'utf-8') : 'Default Content';
-                htmlContent = await replaceTags(htmlContent, replacements);
+                    const currentSubject = subjects.length > 0 ? subjects[subjectIndex] : 'Security Update';
+                    const currentLink = links.length > 0 ? links[linkIndex] : '';
+                    const currentLetterFile = letterFiles.length > 0 ? path.join(CONFIG.lettersDir, letterFiles[letterIndex]) : null;
 
-                const subject = await replaceTags(currentSubject, replacements);
-                const senderName = await replaceTags(CONFIG.senderName, replacements);
+                    const replacements = {
+                        '-email-': email,
+                        '-emailuser-': email.split('@')[0],
+                        '-emaildomain-': email.split('@')[1],
+                        '-emaildomainname-': email.split('@')[1].split('.')[0],
+                        '-link-': currentLink
+                    };
 
-                const transportOptions = { ...currentSmtpConfig };
-                if (CONFIG.useProxy && currentProxy) {
-                    transportOptions.agent = new SocksProxyAgent(currentProxy);
+                    let htmlContent = currentLetterFile ? await fs.readFile(currentLetterFile, 'utf-8') : 'Default Content';
+                    htmlContent = await replaceTags(htmlContent, replacements);
+                    const subject = await replaceTags(currentSubject, replacements);
+                    const senderName = await replaceTags(CONFIG.senderName, replacements);
+
+                    const transportOptions = { ...currentSmtpConfig };
+                    if (CONFIG.useProxy && currentProxy) {
+                        transportOptions.agent = new SocksProxyAgent(currentProxy);
+                    }
+                    const transporter = nodemailer.createTransport(transportOptions);
+
+                    const fromEmail = CONFIG.useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : currentSmtpConfig.auth.user;
+                    const fromAddress = `"${senderName}" <${fromEmail}>`;
+
+                    const mailOptions = {
+                        from: fromAddress,
+                        to: email,
+                        subject: subject,
+                        html: htmlContent,
+                        attachments: [],
+                        headers: {
+                            'X-Mailer': 'Microsoft Outlook 16.0',
+                            'X-Priority': '1 (Highest)',
+                            'Importance': 'High',
+                            'X-MSMail-Priority': 'High',
+                            'X-Originating-IP': '127.0.0.1',
+                            'X-Forwarded-For': '127.0.0.1',
+                            'X-Real-IP': '127.0.0.1'
+                        }
+                    };
+
+                    if (CONFIG.attachmentType !== 'none') {
+                        let attachmentHtml = await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8');
+                        attachmentHtml = await replaceTags(attachmentHtml, replacements);
+                        if (CONFIG.minifyHtml) attachmentHtml = minify(attachmentHtml, { collapseWhitespace: true, removeComments: true });
+
+                        let buffer;
+                        let filename = `Document_${randomstring.generate(7)}`;
+                        let contentType;
+
+                        if (CONFIG.attachmentType === 'pdf') {
+                            buffer = await htmlPdf.generatePdf({ content: attachmentHtml }, { format: 'A4', quality: CONFIG.pdfQuality });
+                            filename += '.pdf';
+                            contentType = 'application/pdf';
+                        } else if (CONFIG.attachmentType === 'png') {
+                            buffer = await nodeHtmlToImage({ html: attachmentHtml });
+                            filename += '.png';
+                            contentType = 'image/png';
+                        }
+
+                        if (CONFIG.encryptAttachment) {
+                            buffer = await encryptData(buffer, CONFIG.encryptionPassword);
+                            filename += '.enc';
+                        }
+
+                        mailOptions.attachments.push({ filename, content: buffer, contentType });
+                        if (CONFIG.signAttachment) {
+                            const signature = await signData(buffer);
+                            mailOptions.attachments.push({ filename: filename + '.sig', content: signature, contentType: 'text/plain' });
+                        }
+                    }
+
+                    await transporter.sendMail(mailOptions);
+                    stats.sent++;
+                    stats.success++;
+                    sent = true;
+
+                } catch (err) {
+                    attempts++;
+                    if (attempts >= CONFIG.retryAttempts) {
+                        console.error(chalk.red(`✘ Failed to send to ${email} after ${attempts} attempts: ${err.message}`));
+                        stats.sent++;
+                        stats.failed++;
+                    } else {
+                        // Rotate on failure
+                        smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                        if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
+                        await delay(2000);
+                    }
                 }
-                const transporter = nodemailer.createTransport(transportOptions);
-
-                const fromEmail = CONFIG.useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : currentSmtpConfig.auth.user;
-                const fromAddress = `"${senderName}" <${fromEmail}>`;
-
-                const mailOptions = {
-                    from: fromAddress,
-                    to: email,
-                    subject: subject,
-                    html: htmlContent,
-                    attachments: [],
-                    headers: {
-                        'X-Mailer': 'Microsoft Outlook 16.0',
-                        'X-Priority': '1 (Highest)',
-                        'Importance': 'High',
-                        'X-MSMail-Priority': 'High',
-                        'X-Originating-IP': '127.0.0.1',
-                        'X-Forwarded-For': '127.0.0.1',
-                        'X-Real-IP': '127.0.0.1'
-                    }
-                };
-
-                // Attachment Logic
-                if (CONFIG.attachmentType !== 'none') {
-                    let attachmentHtml = await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8');
-                    attachmentHtml = await replaceTags(attachmentHtml, replacements);
-                    if (CONFIG.minifyHtml) {
-                        attachmentHtml = minify(attachmentHtml, { collapseWhitespace: true, removeComments: true });
-                    }
-
-                    let buffer;
-                    let filename = `Document_${randomstring.generate(7)}`;
-                    let contentType;
-
-                    if (CONFIG.attachmentType === 'pdf') {
-                        buffer = await htmlPdf.generatePdf({ content: attachmentHtml }, { format: 'A4', quality: CONFIG.pdfQuality });
-                        filename += '.pdf';
-                        contentType = 'application/pdf';
-                    } else if (CONFIG.attachmentType === 'png') {
-                        buffer = await nodeHtmlToImage({ html: attachmentHtml });
-                        filename += '.png';
-                        contentType = 'image/png';
-                    }
-
-                    if (CONFIG.encryptAttachment) {
-                        buffer = await encryptData(buffer, CONFIG.encryptionPassword);
-                        filename += '.enc';
-                    }
-
-                    mailOptions.attachments.push({ filename, content: buffer, contentType });
-
-                    if (CONFIG.signAttachment) {
-                        const signature = await signData(buffer);
-                        mailOptions.attachments.push({ filename: filename + '.sig', content: signature, contentType: 'text/plain' });
-                    }
-                }
-
-                await transporter.sendMail(mailOptions);
-                stats.sent++;
-                stats.success++;
-
-            } catch (err) {
-                console.error(chalk.red(`✘ Error sending to ${email}: ${err.message}`));
-                stats.sent++;
-                stats.failed++;
-            } finally {
-                updateDashboard();
-                smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
-                if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
-                if (subjects.length > 0) subjectIndex = (subjectIndex + 1) % subjects.length;
-                if (links.length > 0) linkIndex = (linkIndex + 1) % links.length;
-                if (letterFiles.length > 0) letterIndex = (letterIndex + 1) % letterFiles.length;
-                await delay(CONFIG.delayBetweenEmails);
             }
+
+            // Normal rotation
+            smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+            if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
+            if (subjects.length > 0) subjectIndex = (subjectIndex + 1) % subjects.length;
+            if (links.length > 0) linkIndex = (linkIndex + 1) % links.length;
+            if (letterFiles.length > 0) letterIndex = (letterIndex + 1) % letterFiles.length;
+            await delay(CONFIG.delayBetweenEmails);
         }
     } catch (err) {
         console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`));
@@ -409,27 +413,20 @@ async function run() {
     console.log(chalk.magenta.bold('\n--- Settings Dashboard ---'));
     const customFrom = await askQuestion('Use Custom From Email? (y/n): ');
     CONFIG.useCustomFromEmail = customFrom.toLowerCase() === 'y';
-
     const useProxy = await askQuestion('Use SOCKS Proxy? (y/n): ');
     CONFIG.useProxy = useProxy.toLowerCase() === 'y';
-
     const attachment = await askQuestion('Attachment Type (pdf/png/none): ');
     CONFIG.attachmentType = ['pdf', 'png', 'none'].includes(attachment.toLowerCase()) ? attachment.toLowerCase() : 'none';
-
     if (CONFIG.attachmentType !== 'none') {
         const encrypt = await askQuestion('Encrypt Attachment (AES-256-CBC)? (y/n): ');
         CONFIG.encryptAttachment = encrypt.toLowerCase() === 'y';
-
         const sign = await askQuestion('SHA-256 Sign Attachment (.sig)? (y/n): ');
         CONFIG.signAttachment = sign.toLowerCase() === 'y';
     }
 
     console.log(chalk.blue('\nStarting campaign with selected settings...\n'));
     await delay(2000);
-
-    // Ensure letters directory exists
     try { await fs.mkdir(CONFIG.lettersDir); } catch (err) { if (err.code !== 'EEXIST') throw err; }
-
     await sendEmails();
 }
 
