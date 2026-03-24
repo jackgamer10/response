@@ -13,10 +13,6 @@ const bwipjs = require('bwip-js');
 const nodeHtmlToImage = require('node-html-to-image');
 const axios = require('axios');
 
-const VALID_KEY_HASHES = [
-    '45e64288f46f64aa4087a9b4e77ddf0071389fd7ce4e3d92049196f659ce4c13',
-];
-
 let stats = {
     sent: 0,
     success: 0,
@@ -64,32 +60,59 @@ function askQuestion(query) {
     }));
 }
 
-async function checkLicense() {
-    try {
-        const key = await fs.readFile('license.key', 'utf-8');
-        const keyHash = crypto.createHash('sha256').update(key.trim()).digest('hex');
-
-        if (!VALID_KEY_HASHES.includes(keyHash)) {
-            throw new Error('Invalid license key.');
+function getHWID() {
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+    let mac = '';
+    for (const name of Object.keys(networkInterfaces)) {
+        for (const net of networkInterfaces[name]) {
+            if (!net.internal && net.mac !== '00:00:00:00:00:00') {
+                mac = net.mac;
+                break;
+            }
         }
-        console.log('License key validated.');
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            console.log('License key file not found.');
-            const enteredKey = await askQuestion('Please enter your license key: ');
-            const enteredKeyHash = crypto.createHash('sha256').update(enteredKey.trim()).digest('hex');
+        if (mac) break;
+    }
+    const hwidInfo = `${os.hostname()}-${os.type()}-${os.arch()}-${mac}`;
+    return crypto.createHash('sha256').update(hwidInfo).digest('hex').substring(0, 16).toUpperCase();
+}
 
-            if (VALID_KEY_HASHES.includes(enteredKeyHash)) {
-                console.log('License key is valid. Saving for future use.');
-                await fs.writeFile('license.key', enteredKey.trim());
-            } else {
-                console.error('Error: The license key you entered is invalid.');
-                console.error('Please contact the administrator for an activation key.');
-                process.exit(1);
+function obfuscate(str) {
+    return Buffer.from(str).toString('base64').split('').reverse().join('');
+}
+
+function deobfuscate(str) {
+    return Buffer.from(str.split('').reverse().join(''), 'base64').toString('utf-8');
+}
+
+async function checkLicense() {
+    const hwid = getHWID();
+    const activationFile = 'activation.sys';
+
+    try {
+        const obfuscatedToken = await fs.readFile(activationFile, 'utf-8');
+        const token = deobfuscate(obfuscatedToken);
+        const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-SALT').digest('hex').substring(0, 16).toUpperCase();
+
+        if (token !== expectedToken) {
+            throw new Error('Invalid activation token.');
+        }
+        console.log('License activated successfully.');
+    } catch (err) {
+        console.log(`\nYour HWID: ${hwid}`);
+        const enteredToken = await askQuestion('Please enter your activation token: ');
+        const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-SALT').digest('hex').substring(0, 16).toUpperCase();
+
+        if (enteredToken.trim().toUpperCase() === expectedToken) {
+            console.log('Token validated. Activating...');
+            await fs.writeFile(activationFile, obfuscate(enteredToken.trim().toUpperCase()));
+            // Hide file on Windows
+            if (process.platform === 'win32') {
+                const { exec } = require('child_process');
+                exec(`attrib +h ${activationFile}`);
             }
         } else {
-            console.error('Error: License key is invalid.');
-            console.error('Please contact the administrator for an activation key.');
+            console.error('Error: Invalid activation token. Please contact the administrator.');
             process.exit(1);
         }
     }
@@ -166,17 +189,19 @@ async function generateBarcode(data) {
 async function replaceTags(text, replacements) {
     let newText = text;
 
-    // Basic Tags
+    // Static Tags
     newText = newText.replace(/\[-email-\]/g, replacements['-email-'] || '');
     newText = newText.replace(/\[-emailuser-\]/g, replacements['-emailuser-'] || '');
     newText = newText.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-'] || '');
     newText = newText.replace(/\[-emaildomainname-\]/g, replacements['-emaildomainname-'] || '');
-    newText = newText.replace(/\[-randomstring-\]/g, randomstring.generate());
-    newText = newText.replace(/\[-randomnumber-\]/g, Math.floor(1000 + Math.random() * 9000).toString());
-    newText = newText.replace(/\[-time-\]/g, new Date().toLocaleString());
-
-    // Link Tag
     newText = newText.replace(/\[-link-\]/g, replacements['-link-'] || '');
+
+    // Dynamic Tags (Multiple occurrences generate different values)
+    newText = newText.replace(/\[-randomstring-\]/g, () => randomstring.generate());
+    newText = newText.replace(/\[-randomnumber-\]/g, () => Math.floor(1000 + Math.random() * 9000).toString());
+    newText = newText.replace(/\[-randomletters-\]/g, () => randomstring.generate({ charset: 'alphabetic' }));
+    newText = newText.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
+    newText = newText.replace(/\[-time-\]/g, () => new Date().toLocaleString());
 
     // Recipient Logo Tag
     const domain = replacements['-emaildomain-'] || (replacements['-email-'] ? replacements['-email-'].split('@')[1] : '');
@@ -184,7 +209,6 @@ async function replaceTags(text, replacements) {
     newText = newText.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
 
     // Barcode Tag: [-barcode-DATA-]
-    // Improved replacement logic to handle multiple barcodes correctly
     const barcodeRegex = /\[-barcode-(.*?)-\]/g;
     const matches = [...newText.matchAll(barcodeRegex)];
     for (const match of matches) {
@@ -223,7 +247,7 @@ async function loadSmtp(filePath) {
     try {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
-            // Expected Format: host|port|user|pass|fromEmail
+            // Format: host|port|user|pass|fromEmail
             const parts = line.split('|');
             return {
                 host: parts[0],

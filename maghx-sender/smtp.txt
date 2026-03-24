@@ -1,1 +1,1 @@
-smtp.lolipop.jp|587|info@zakka-beans.com|9yzmnk|noreply-ionos_notice@message.com
+smtp.example.com|587|user@example.com|password|from@example.com
