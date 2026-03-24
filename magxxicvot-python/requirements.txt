@@ -6,4 +6,4 @@ PySocks
 cryptography
 xhtml2pdf
 html2image
-htmlmin
+minify-html

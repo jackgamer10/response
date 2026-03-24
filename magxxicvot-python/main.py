@@ -247,8 +247,8 @@ def send_emails():
                     if CONFIG["attachment_type"] != "none":
                         with open(CONFIG["attachment_html_path"], "r", encoding="utf-8") as f: att_html = replace_tags(f.read(), replacements)
                         try:
-                            from htmlmin import minify
-                            if CONFIG["minify_html"]: att_html = minify(att_html, remove_comments=True)
+                            import minify_html
+                            if CONFIG["minify_html"]: att_html = minify_html.minify(att_html, minify_js=True, remove_processing_instructions=True)
                         except ImportError: pass
                         filename = replace_tags(CONFIG["pdf_name"], replacements)
                         if CONFIG["attachment_type"] == "pdf": att_data, ext, c_type = html_to_pdf(att_html), ".pdf", "application/pdf"
