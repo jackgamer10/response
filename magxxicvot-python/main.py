@@ -21,6 +21,9 @@ from io import BytesIO
 from rich.console import Console
 from rich.table import Table
 from rich.live import Live
+from rich.panel import Panel
+from rich.layout import Layout
+from rich import box
 import socks
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -77,21 +80,21 @@ def check_activation():
         with open(activation_file, "r") as f:
             token = deobfuscate(f.read().strip())
             if token == expected_token:
-                console.print("[green]License activated successfully.[/green]")
+                console.print(Panel(f"[green]✔ License activated successfully.[/green]", box=box.ROUNDED, style="bold green"))
                 return
 
-    console.print(f"\n[bold yellow]Your HWID:[/bold yellow] {hwid}")
-    entered_token = input("Please enter your activation token: ").strip().upper()
+    console.print(Panel(f"[bold yellow]Your HWID:[/bold yellow] [cyan]{hwid}[/cyan]", box=box.DOUBLE, title="Activation Required", style="bold magenta"))
+    entered_token = console.input("[bold magenta]Please enter your activation token: [/bold magenta]").strip().upper()
 
     if entered_token == expected_token:
-        console.print("[green]Token validated. Activating...[/green]")
+        console.print("[green]✔ Token validated. Activating...[/green]")
         with open(activation_file, "w") as f:
             f.write(obfuscate(entered_token))
         if os.name == 'nt':
             import ctypes
             ctypes.windll.kernel32.SetFileAttributesW(activation_file, 0x02)
     else:
-        console.print("[bold red]Error: Invalid activation token. Please contact the administrator.[/bold red]")
+        console.print("[bold red]✘ Error: Invalid activation token. Please contact the administrator.[/bold red]")
         sys.exit(1)
 
 def print_banner():
@@ -103,10 +106,8 @@ def print_banner():
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
-    console.print(banner, style="bold cyan")
-    console.print("[+] MagxxicVOT XII Python Edition", style="bold blue")
-    console.print("[+] Military-Grade MIME & Proxy Protection", style="bold blue")
-    console.print("[+] Advanced Content & Attachment Shield", style="bold blue")
+    console.print(banner, style="bold magenta")
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v1.0[/bold cyan]\n[blue]Military-Grade MIME & Proxy Protection\nAdvanced Content & Attachment Shield[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def generate_barcode(data):
     try:
@@ -161,13 +162,15 @@ def encrypt_attachment(data, password):
     return iv + encrypted
 
 def get_stats_table():
-    table = Table(title="MAGXXICVOT XII LIVE DASHBOARD", style="bold cyan")
+    table = Table(box=box.MINIMAL_DOUBLE_HEAD, expand=True, border_style="cyan")
     table.add_column("Metric", style="bold yellow")
-    table.add_column("Value", style="bold green")
-    table.add_row("Sent", str(stats["sent"]))
-    table.add_row("Success", str(stats["success"]))
-    table.add_row("Failed", str(stats["failed"]))
-    return table
+    table.add_column("Value", style="bold white", justify="right")
+    table.add_row("Total Sent", f"[bold yellow]{stats['sent']}[/bold yellow]")
+    table.add_row("Success ✅", f"[bold green]{stats['success']}[/bold green]")
+    table.add_row("Failed ❌", f"[bold red]{stats['failed']}[/bold red]")
+
+    status_panel = Panel(table, title="[bold magenta]MagxxicVOT XII Live Dashboard[/bold magenta]", subtitle="[blue]Status: Mailing in progress...[/blue]", border_style="cyan")
+    return status_panel
 
 def load_list(path):
     if os.path.exists(path):
@@ -192,6 +195,27 @@ def load_smtp(path):
             return configs
     return []
 
+def validate_proxies(proxies):
+    console.print(f"[yellow]Validating {len(proxies)} proxies...[/yellow]")
+    valid = []
+    for proxy in proxies:
+        try:
+            proxy_parts = re.split(r'[:@/]+', proxy)
+            # Use a fast check against google.com
+            test_conn = socks.create_connection(
+                ("www.google.com", 80),
+                proxy_type=socks.SOCKS5,
+                proxy_addr=proxy_parts[-2],
+                proxy_port=int(proxy_parts[-1]),
+                timeout=5
+            )
+            test_conn.close()
+            valid.append(proxy)
+            console.print(f"[green]✔ Proxy {proxy} OK.[/green]")
+        except:
+            console.print(f"[red]✘ Proxy {proxy} FAILED.[/red]")
+    return valid
+
 def html_to_pdf(html_content):
     result = BytesIO()
     pisa.CreatePDF(html_content, dest=result)
@@ -199,16 +223,13 @@ def html_to_pdf(html_content):
 
 def html_to_png(html_content):
     hti = HtmlToImage()
-    # Temporary file for content
     temp_html = "temp_att.html"
     with open(temp_html, "w", encoding="utf-8") as f:
         f.write(html_content)
-    # This renders and saves, so we read it back
     out_png = "temp_att.png"
     hti.screenshot(html_file=temp_html, save_as=out_png)
     with open(out_png, "rb") as f:
         data = f.read()
-    # Cleanup
     if os.path.exists(temp_html): os.remove(temp_html)
     if os.path.exists(out_png): os.remove(out_png)
     return data
@@ -221,8 +242,11 @@ def send_emails():
     letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
     proxies = load_list(CONFIG["proxies_path"])
 
+    if CONFIG["use_proxy"] and CONFIG["auto_validate_proxies"] and proxies:
+        proxies = validate_proxies(proxies)
+
     if not smtps:
-        console.print("[red]No SMTP configurations found.[/red]")
+        console.print("[bold red]✘ No SMTP configurations found.[/bold red]")
         return
 
     smtp_idx, subject_idx, link_idx, letter_idx, proxy_idx = 0, 0, 0, 0, 0
@@ -284,7 +308,7 @@ def send_emails():
                         att_data = html_to_png(att_html)
                         filename += ".png"
                         content_type = "image/png"
-                    else: # fallback to html
+                    else:
                         att_data = att_html.encode()
                         filename += ".html"
                         content_type = "text/html"
@@ -306,7 +330,7 @@ def send_emails():
                         part_sig.add_header("Content-Disposition", f'attachment; filename="{filename}.sig"')
                         msg.attach(part_sig)
 
-                # Use ephemeral socket for proxy to avoid global monkey-patching
+                # SMTP logic with Proxy Support
                 def get_proxy_conn():
                     if current_proxy:
                         proxy_parts = re.split(r'[:@/]+', current_proxy)
@@ -323,7 +347,6 @@ def send_emails():
                 server = smtplib.SMTP(timeout=30)
                 server.sock = conn
                 server._host = smtp_cfg["host"]
-                # Initiate SMTP
                 server.ehlo_or_helo_if_needed()
                 if server.has_extn('starttls'):
                     server.starttls()
@@ -350,16 +373,16 @@ def run():
     check_activation()
     print_banner()
 
-    console.print("\n--- Settings Dashboard ---")
-    CONFIG["use_custom_from"] = input("Use Custom From Email? (y/n): ").lower() == 'y'
-    CONFIG["use_proxy"] = input("Use SOCKS Proxy? (y/n): ").lower() == 'y'
-    CONFIG["attachment_type"] = input("Attachment Type (pdf/png/html/none): ").lower()
+    console.print(Panel("[bold magenta]Settings Dashboard[/bold magenta]", box=box.SQUARE, style="bold cyan"))
+    CONFIG["use_custom_from"] = console.input("[bold blue]Use Custom From Email? (y/n): [/bold blue]").lower() == 'y'
+    CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
+    CONFIG["attachment_type"] = console.input("[bold blue]Attachment Type (pdf/png/html/none): [/bold blue]").lower()
 
     if CONFIG["attachment_type"] != "none":
-        CONFIG["encrypt_attachment"] = input("Encrypt Attachment? (y/n): ").lower() == 'y'
-        CONFIG["sign_attachment"] = input("Sign Attachment? (y/n): ").lower() == 'y'
+        CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
+        CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
 
-    console.log("\nStarting campaign with selected settings...\n")
+    console.print("\n[bold green]✔ Starting campaign with selected settings...[/bold green]\n")
     time.sleep(2)
 
     if not os.path.exists(CONFIG["letters_dir"]):

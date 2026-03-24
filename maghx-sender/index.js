@@ -12,6 +12,7 @@ const path = require('path');
 const bwipjs = require('bwip-js');
 const nodeHtmlToImage = require('node-html-to-image');
 const axios = require('axios');
+const chalk = require('chalk');
 
 let stats = {
     sent: 0,
@@ -44,18 +45,18 @@ const CONFIG = {
 };
 
 function askQuestion(query) {
-    console.log('┌───────────────────────────────────────────────────┐');
+    console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: `│ ${query}`
+        prompt: chalk.cyan('│ ') + chalk.yellow(query)
     });
 
     rl.prompt();
 
     return new Promise(resolve => rl.on('line', (line) => {
         rl.close();
-        console.log('└───────────────────────────────────────────────────┘');
+        console.log(chalk.cyan('└───────────────────────────────────────────────────┘'));
         resolve(line);
     }));
 }
@@ -97,14 +98,14 @@ async function checkLicense() {
         if (token !== expectedToken) {
             throw new Error('Invalid activation token.');
         }
-        console.log('License activated successfully.');
+        console.log(chalk.green('✔ License activated successfully.'));
     } catch (err) {
-        console.log(`\nYour HWID: ${hwid}`);
+        console.log(chalk.yellow(`\nYour HWID: `) + chalk.cyan(hwid));
         const enteredToken = await askQuestion('Please enter your activation token: ');
         const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-SALT').digest('hex').substring(0, 16).toUpperCase();
 
         if (enteredToken.trim().toUpperCase() === expectedToken) {
-            console.log('Token validated. Activating...');
+            console.log(chalk.green('✔ Token validated. Activating...'));
             await fs.writeFile(activationFile, obfuscate(enteredToken.trim().toUpperCase()));
             // Hide file on Windows
             if (process.platform === 'win32') {
@@ -112,7 +113,7 @@ async function checkLicense() {
                 exec(`attrib +h ${activationFile}`);
             }
         } else {
-            console.error('Error: Invalid activation token. Please contact the administrator.');
+            console.error(chalk.red('✘ Error: Invalid activation token. Please contact the administrator.'));
             process.exit(1);
         }
     }
@@ -122,17 +123,17 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function printWithDelay(text, delayTime) {
+function printWithDelay(text, delayTime, color = chalk.white) {
     return new Promise(resolve => {
         setTimeout(() => {
-            console.log(text);
+            console.log(color(text));
             resolve();
         }, delayTime);
     });
 }
 
 async function printLines() {
-    await printWithDelay('MagxxicVOT XII Sender Start', 500);
+    await printWithDelay('MagxxicVOT XII Sender Start', 500, chalk.cyan.bold);
     await printWithDelay('', 500);
     await printWithDelay(`
 ███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗██╗ ██████╗██╗   ██╗ ██████╗ ████████╗  ██╗  ██╗██╗██╗
@@ -141,20 +142,19 @@ async function printLines() {
 ██║╚██╔╝██║██╔══██║██║   ██║██╔══██║ ██╔██╗ ██║██║     ╚██╗ ██╔╝██║   ██║   ██║      ██╔██╗ ██║██║
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
-`, 500);
-    await printWithDelay('[+] MagxxicVOT XII', 500);
-    await printWithDelay('[+] Military-Grade MIME & Proxy Protection', 500);
-    await printWithDelay('[+] Advanced Content & Attachment Shield', 500);
-    await printWithDelay('[+] Configuration Checked & Locked', 500);
+`, 500, chalk.magenta.bold);
+    await printWithDelay('[+] MagxxicVOT XII v1.0', 500, chalk.blue.bold);
+    await printWithDelay('[+] Military-Grade MIME & Proxy Protection', 500, chalk.blue);
+    await printWithDelay('[+] Advanced Content & Attachment Shield', 500, chalk.blue);
+    await printWithDelay('[+] Configuration Checked & Locked', 500, chalk.blue);
 }
 
 async function validateProxies(proxies) {
-    console.log(`Validating ${proxies.length} proxies...`);
+    console.log(chalk.yellow(`Validating ${proxies.length} proxies...`));
     const validProxies = [];
     for (const proxy of proxies) {
         try {
             const agent = new SocksProxyAgent(proxy);
-            // Using a simple head request to check connectivity
             await axios.get('http://www.google.com', {
                 httpAgent: agent,
                 httpsAgent: agent,
@@ -162,9 +162,9 @@ async function validateProxies(proxies) {
                 validateStatus: () => true
             });
             validProxies.push(proxy);
-            console.log(`Proxy ${proxy} OK.`);
+            console.log(chalk.green(`✔ Proxy ${proxy} OK.`));
         } catch (err) {
-            console.log(`Proxy ${proxy} FAILED.`);
+            console.log(chalk.red(`✘ Proxy ${proxy} FAILED.`));
         }
     }
     return validProxies;
@@ -187,37 +187,37 @@ async function generateBarcode(data) {
 }
 
 async function replaceTags(text, replacements) {
-    let newText = text;
+    let content = text;
 
     // Static Tags
-    newText = newText.replace(/\[-email-\]/g, replacements['-email-'] || '');
-    newText = newText.replace(/\[-emailuser-\]/g, replacements['-emailuser-'] || '');
-    newText = newText.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-'] || '');
-    newText = newText.replace(/\[-emaildomainname-\]/g, replacements['-emaildomainname-'] || '');
-    newText = newText.replace(/\[-link-\]/g, replacements['-link-'] || '');
+    content = content.replace(/\[-email-\]/g, replacements['-email-'] || '');
+    content = content.replace(/\[-emailuser-\]/g, replacements['-emailuser-'] || '');
+    content = content.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-'] || '');
+    content = content.replace(/\[-emaildomainname-\]/g, replacements['-emaildomainname-'] || '');
+    content = content.replace(/\[-link-\]/g, replacements['-link-'] || '');
 
-    // Dynamic Tags (Multiple occurrences generate different values)
-    newText = newText.replace(/\[-randomstring-\]/g, () => randomstring.generate());
-    newText = newText.replace(/\[-randomnumber-\]/g, () => Math.floor(1000 + Math.random() * 9000).toString());
-    newText = newText.replace(/\[-randomletters-\]/g, () => randomstring.generate({ charset: 'alphabetic' }));
-    newText = newText.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
-    newText = newText.replace(/\[-time-\]/g, () => new Date().toLocaleString());
+    // Dynamic Tags
+    content = content.replace(/\[-randomstring-\]/g, () => randomstring.generate());
+    content = content.replace(/\[-randomnumber-\]/g, () => Math.floor(1000 + Math.random() * 9000).toString());
+    content = content.replace(/\[-randomletters-\]/g, () => randomstring.generate({ charset: 'alphabetic' }));
+    content = content.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
+    content = content.replace(/\[-time-\]/g, () => new Date().toLocaleString());
 
     // Recipient Logo Tag
     const domain = replacements['-emaildomain-'] || (replacements['-email-'] ? replacements['-email-'].split('@')[1] : '');
     const logoUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
-    newText = newText.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
+    content = content.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
 
     // Barcode Tag: [-barcode-DATA-]
     const barcodeRegex = /\[-barcode-(.*?)-\]/g;
-    const matches = [...newText.matchAll(barcodeRegex)];
+    const matches = [...content.matchAll(barcodeRegex)];
     for (const match of matches) {
         const barcodeData = match[1];
         const barcodeBase64 = await generateBarcode(barcodeData);
-        newText = newText.replace(match[0], `<img src="data:image/png;base64,${barcodeBase64}" alt="Barcode">`);
+        content = content.replace(match[0], `<img src="data:image/png;base64,${barcodeBase64}" alt="Barcode">`);
     }
 
-    return newText;
+    return content;
 }
 
 async function encryptData(data, password) {
@@ -247,7 +247,6 @@ async function loadSmtp(filePath) {
     try {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
-            // Format: host|port|user|pass|fromEmail
             const parts = line.split('|');
             return {
                 host: parts[0],
@@ -257,22 +256,22 @@ async function loadSmtp(filePath) {
             };
         });
     } catch (err) {
-        console.error(`Error loading SMTP: ${err.message}`);
+        console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`));
         return [];
     }
 }
 
 function updateDashboard() {
     process.stdout.write('\x1Bc'); // Clear console
-    console.log('┌───────────────────────────────────────────────────┐');
-    console.log('│             MAGXXICVOT XII LIVE DASHBOARD         │');
-    console.log('├───────────────────────────────────────────────────┤');
-    console.log(`│ Sent      : ${stats.sent.toString().padEnd(38)} │`);
-    console.log(`│ Success   : ${stats.success.toString().padEnd(38)} │`);
-    console.log(`│ Failed    : ${stats.failed.toString().padEnd(38)} │`);
-    console.log('├───────────────────────────────────────────────────┤');
-    console.log(`│ Status    : Mailing in progress...                │`);
-    console.log('└───────────────────────────────────────────────────┘');
+    console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
+    console.log(chalk.cyan('│             ') + chalk.magenta.bold('MAGXXICVOT XII LIVE DASHBOARD') + chalk.cyan('         │'));
+    console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
+    console.log(chalk.cyan('│ ') + chalk.white('Sent      : ') + chalk.yellow(stats.sent.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Success   : ') + chalk.green(stats.success.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Failed    : ') + chalk.red(stats.failed.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
+    console.log(chalk.cyan('│ ') + chalk.white('Status    : ') + chalk.blue('Mailing in progress...') + chalk.cyan('                │'));
+    console.log(chalk.cyan('└───────────────────────────────────────────────────┘'));
 }
 
 async function sendEmails() {
@@ -385,7 +384,7 @@ async function sendEmails() {
                 stats.success++;
 
             } catch (err) {
-                console.error(`Error sending to ${email}: ${err.message}`);
+                console.error(chalk.red(`✘ Error sending to ${email}: ${err.message}`));
                 stats.sent++;
                 stats.failed++;
             } finally {
@@ -399,7 +398,7 @@ async function sendEmails() {
             }
         }
     } catch (err) {
-        console.error(`Fatal Error: ${err.message}`);
+        console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`));
     }
 }
 
@@ -407,7 +406,7 @@ async function run() {
     await checkLicense();
     await printLines();
 
-    console.log('\n--- Settings Dashboard ---');
+    console.log(chalk.magenta.bold('\n--- Settings Dashboard ---'));
     const customFrom = await askQuestion('Use Custom From Email? (y/n): ');
     CONFIG.useCustomFromEmail = customFrom.toLowerCase() === 'y';
 
@@ -425,7 +424,7 @@ async function run() {
         CONFIG.signAttachment = sign.toLowerCase() === 'y';
     }
 
-    console.log('\nStarting campaign with selected settings...\n');
+    console.log(chalk.blue('\nStarting campaign with selected settings...\n'));
     await delay(2000);
 
     // Ensure letters directory exists
