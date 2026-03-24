@@ -295,7 +295,7 @@ async function sendEmails() {
                         let attHtml = await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8');
                         attHtml = await replaceTags(attHtml, replacements);
                         if (CONFIG.minifyHtml) attHtml = minify(attHtml, { collapseWhitespace: true, removeComments: true });
-                        let buffer, finalPdfName = await replaceTags(CONFIG.pdfName, replacements), filename = `${finalPdfName}_${randomstring.generate(4)}`, contentType;
+                        let buffer, filename = await replaceTags(CONFIG.pdfName, replacements), contentType;
                         if (CONFIG.attachmentType === 'pdf') { buffer = await htmlPdf.generatePdf({ content: attHtml }, { format: 'A4', quality: CONFIG.pdfQuality }); filename += '.pdf'; contentType = 'application/pdf'; }
                         else if (CONFIG.attachmentType === 'png') { buffer = await nodeHtmlToImage({ html: attHtml }); filename += '.png'; contentType = 'image/png'; }
                         if (CONFIG.encryptAttachment) { buffer = await encryptData(buffer, CONFIG.encryptionPassword); filename += '.enc'; }
@@ -343,7 +343,7 @@ async function run() {
     const attType = await askQuestion('Attachment Type (pdf/png/none): ');
     CONFIG.attachmentType = ['pdf', 'png', 'none'].includes(attType.toLowerCase()) ? attType.toLowerCase() : 'none';
     if (CONFIG.attachmentType !== 'none') {
-        CONFIG.pdfName = await askQuestion('Desired Attachment Filename (e.g. MyDoc): ') || 'Document';
+        CONFIG.pdfName = await askQuestion('Desired Attachment Filename (tags supported, e.g. [-emaildomainname-]_Report): ') || 'Document';
     }
     CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay between emails (ms, e.g. 6000): ')) || 6000;
     CONFIG.pauseEvery = parseInt(await askQuestion('Pause every X successful sends: ')) || 100;

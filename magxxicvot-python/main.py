@@ -236,8 +236,7 @@ def send_emails():
                     if CONFIG["attachment_type"] != "none":
                         with open(CONFIG["attachment_html_path"], "r", encoding="utf-8") as f: att_html = replace_tags(f.read(), replacements)
                         if CONFIG["minify_html"]: att_html = minify(att_html, remove_comments=True)
-                        final_pdf_name = replace_tags(CONFIG["pdf_name"], replacements)
-                        filename = f"{final_pdf_name}_{random.randint(1000,9999)}"
+                        filename = replace_tags(CONFIG["pdf_name"], replacements)
                         if CONFIG["attachment_type"] == "pdf": att_data, ext, c_type = html_to_pdf(att_html), ".pdf", "application/pdf"
                         elif CONFIG["attachment_type"] == "png": att_data, ext, c_type = html_to_png(att_html), ".png", "image/png"
                         else: att_data, ext, c_type = att_html.encode(), ".html", "text/html"
@@ -278,7 +277,7 @@ def run():
     CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["attachment_type"] = console.input("[bold blue]Attachment Type (pdf/png/html/none): [/bold blue]").lower()
     if CONFIG["attachment_type"] != "none":
-        CONFIG["pdf_name"] = console.input("[bold blue]Desired Attachment Filename (e.g. MyDoc): [/bold blue]") or "Document"
+        CONFIG["pdf_name"] = console.input("[bold blue]Desired Attachment Filename (tags supported, e.g. [-emaildomainname-]_Report): [/bold blue]") or "Document"
     CONFIG["delay"] = float(console.input("[bold blue]Delay between emails (seconds): [/bold blue]") or 6.0)
     CONFIG["pause_every"] = int(console.input("[bold blue]Pause every X successful sends: [/bold blue]") or 100)
     CONFIG["pause_time"] = int(console.input("[bold blue]Pause time (seconds): [/bold blue]") or 300)
