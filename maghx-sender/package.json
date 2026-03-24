@@ -1,0 +1,15 @@
+{
+  "name": "maghx-sender",
+  "version": "1.0.0",
+  "description": "MagxxicVOT XII",
+  "main": "index.js",
+  "dependencies": {
+    "nodemailer": "^6.9.1",
+    "randomstring": "^1.2.3",
+    "html-pdf-node": "^1.0.8",
+    "html-minifier": "^4.0.0",
+    "socks-proxy-agent": "^7.0.0",
+    "bwip-js": "^4.0.0",
+    "axios": "^1.3.4"
+  }
+}
