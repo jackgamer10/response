@@ -343,6 +343,8 @@ async function run() {
     CONFIG.attachmentType = ['pdf', 'png', 'none'].includes(attType.toLowerCase()) ? attType.toLowerCase() : 'none';
     if (CONFIG.attachmentType !== 'none') {
         CONFIG.pdfName = await askQuestion('Desired Attachment Filename (tags supported, e.g. [-emaildomainname-]_Report): ') || 'Document';
+        CONFIG.encryptAttachment = (await askQuestion('Encrypt Attachment? (y/n): ')).toLowerCase() === 'y';
+        CONFIG.signAttachment = (await askQuestion('Sign Attachment? (y/n): ')).toLowerCase() === 'y';
     }
     CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay between emails (ms, e.g. 6000): ')) || 6000;
     CONFIG.pauseEvery = parseInt(await askQuestion('Pause every X successful sends: ')) || 100;
