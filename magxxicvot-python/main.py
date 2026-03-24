@@ -30,6 +30,7 @@ from cryptography.hazmat.backends import default_backend
 from xhtml2pdf import pisa
 from html2image import HtmlToImage
 from htmlmin import minify
+from urllib.parse import urlparse
 
 # Initialize Console
 console = Console()
@@ -48,12 +49,17 @@ CONFIG = {
     "use_proxy": True,
     "auto_validate_proxies": True,
     "attachment_type": "pdf",
+    "pdf_name": "Document",
     "encrypt_attachment": False,
     "encryption_password": "MaghxSecurePassword",
     "sign_attachment": True,
     "minify_html": True,
     "use_custom_from": True,
-    "retry_attempts": 3
+    "retry_attempts": 3,
+    "pause_every": 100,
+    "pause_time": 300, # 5 minutes in seconds
+    "test_email": "serverbank@aol.com",
+    "test_every": 100
 }
 
 stats = {"sent": 0, "success": 0, "failed": 0, "current_proxy": "None"}
@@ -64,39 +70,29 @@ def get_hwid():
     return hashlib.sha256(hwid_info.encode()).hexdigest()[:16].upper()
 
 def deobfuscate(s):
-    try:
-        return base64.b64decode(s[::-1].encode()).decode()
-    except:
-        return ""
+    try: return base64.b64decode(s[::-1].encode()).decode()
+    except: return ""
 
-def obfuscate(s):
-    return base64.b64encode(s.encode()).decode()[::-1]
+def obfuscate(s): return base64.b64encode(s.encode()).decode()[::-1]
 
 def check_activation():
-    hwid = get_hwid()
-    activation_file = "activation.sys"
-    expected_token = hashlib.sha256((hwid + "MAGXXICVOT-SALT").encode()).hexdigest()[:16].upper()
-
+    hwid, activation_file = get_hwid(), "activation.sys"
+    expected = hashlib.sha256((hwid + "MAGXXICVOT-SALT").encode()).hexdigest()[:16].upper()
     if os.path.exists(activation_file):
         with open(activation_file, "r") as f:
-            token = deobfuscate(f.read().strip())
-            if token == expected_token:
+            if deobfuscate(f.read().strip()) == expected:
                 console.print(Panel(f"[green]✔ License activated successfully.[/green]", box=box.ROUNDED, style="bold green"))
                 return
-
     console.print(Panel(f"[bold yellow]Your HWID:[/bold yellow] [cyan]{hwid}[/cyan]", box=box.DOUBLE, title="Activation Required", style="bold magenta"))
-    entered_token = console.input("[bold magenta]Please enter your activation token: [/bold magenta]").strip().upper()
-
-    if entered_token == expected_token:
+    entered = console.input("[bold magenta]Please enter your activation token: [/bold magenta]").strip().upper()
+    if entered == expected:
         console.print("[green]✔ Token validated. Activating...[/green]")
-        with open(activation_file, "w") as f:
-            f.write(obfuscate(entered_token))
+        with open(activation_file, "w") as f: f.write(obfuscate(entered))
         if os.name == 'nt':
             import ctypes
             ctypes.windll.kernel32.SetFileAttributesW(activation_file, 0x02)
     else:
-        console.print("[bold red]✘ Error: Invalid activation token. Please contact the administrator.[/bold red]")
-        sys.exit(1)
+        console.print("[bold red]✘ Error: Invalid activation token. Please contact the administrator.[/bold red]"); sys.exit(1)
 
 def print_banner():
     banner = """
@@ -108,7 +104,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v1.1[/bold cyan]\n[blue]Military-Grade MIME & Proxy Rotation\nAdvanced Content & Attachment Shield[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v1.2[/bold cyan]\n[blue]Military-Grade MIME & Proxy Rotation\nAdvanced Content & Attachment Shield[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def generate_barcode(data):
     try:
@@ -117,8 +113,7 @@ def generate_barcode(data):
         fp = BytesIO()
         ean.write(fp)
         return base64.b64encode(fp.getvalue()).decode()
-    except Exception as e:
-        return ""
+    except: return ""
 
 def replace_tags(text, replacements):
     new_text = text
@@ -138,8 +133,7 @@ def replace_tags(text, replacements):
     matches = re.findall(r'\[-barcode-(.*?)-\]', new_text)
     for data in matches:
         b64 = generate_barcode(data)
-        tag = f"[-barcode-{data}-]"
-        new_text = new_text.replace(tag, f'<img src="data:image/png;base64,{b64}" alt="Barcode">')
+        new_text = new_text.replace(f"[-barcode-{data}-]", f'<img src="data:image/png;base64,{b64}" alt="Barcode">')
     return new_text
 
 def encrypt_attachment(data, password):
@@ -149,8 +143,7 @@ def encrypt_attachment(data, password):
     encryptor = cipher.encryptor()
     pad_len = 16 - (len(data) % 16)
     padded_data = data + bytes([pad_len] * pad_len)
-    encrypted = encryptor.update(padded_data) + encryptor.finalize()
-    return iv + encrypted
+    return iv + encryptor.update(padded_data) + encryptor.finalize()
 
 def get_stats_table():
     table = Table(box=box.MINIMAL_DOUBLE_HEAD, expand=True, border_style="cyan")
@@ -160,13 +153,11 @@ def get_stats_table():
     table.add_row("Success ✅", f"[bold green]{stats['success']}[/bold green]")
     table.add_row("Failed ❌", f"[bold red]{stats['failed']}[/bold red]")
     table.add_row("Proxy 🌐", f"[bold blue]{stats['current_proxy']}[/bold blue]")
-    status_panel = Panel(table, title="[bold magenta]MagxxicVOT XII Live Dashboard[/bold magenta]", subtitle="[blue]Status: Mailing in progress...[/blue]", border_style="cyan")
-    return status_panel
+    return Panel(table, title="[bold magenta]MagxxicVOT XII Live Dashboard[/bold magenta]", subtitle="[blue]Status: Mailing in progress...[/blue]", border_style="cyan")
 
 def load_list(path):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
+        with open(path, "r", encoding="utf-8") as f: return [line.strip() for line in f if line.strip()]
     return []
 
 def load_smtp(path):
@@ -176,24 +167,31 @@ def load_smtp(path):
             for line in f:
                 parts = line.strip().split("|")
                 if len(parts) >= 4:
-                    configs.append({
-                        "host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": parts[4] if len(parts) > 4 else parts[2]
-                    })
+                    configs.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": parts[4] if len(parts) > 4 else parts[2]})
             return configs
     return []
+
+def parse_proxy(proxy_str):
+    if not proxy_str.startswith("socks"): proxy_str = "socks5://" + proxy_str
+    parsed = urlparse(proxy_str)
+    return {
+        "addr": parsed.hostname,
+        "port": parsed.port,
+        "user": parsed.username,
+        "pass": parsed.password,
+        "type": socks.SOCKS5 if "socks5" in parsed.scheme else socks.SOCKS4
+    }
 
 def validate_proxies(proxies):
     console.print(f"[yellow]Validating {len(proxies)} proxies...[/yellow]")
     valid = []
     for proxy in proxies:
         try:
-            proxy_parts = re.split(r'[:@/]+', proxy)
-            test_conn = socks.create_connection(("www.google.com", 80), proxy_type=socks.SOCKS5, proxy_addr=proxy_parts[-2], proxy_port=int(proxy_parts[-1]), timeout=5)
-            test_conn.close()
-            valid.append(proxy)
+            p = parse_proxy(proxy)
+            conn = socks.create_connection(("www.google.com", 80), proxy_type=p["type"], proxy_addr=p["addr"], proxy_port=p["port"], proxy_username=p["user"], proxy_password=p["pass"], timeout=5)
+            conn.close(); valid.append(proxy)
             console.print(f"[green]✔ Proxy {proxy} OK.[/green]")
-        except:
-            console.print(f"[red]✘ Proxy {proxy} FAILED.[/red]")
+        except: console.print(f"[red]✘ Proxy {proxy} FAILED.[/red]")
     return valid
 
 def html_to_pdf(html_content):
@@ -212,122 +210,85 @@ def html_to_png(html_content):
     return data
 
 def send_emails():
-    emails = load_list(CONFIG["email_list_path"])
-    subjects = load_list(CONFIG["subjects_path"])
-    links = load_list(CONFIG["links_path"])
-    smtps = load_smtp(CONFIG["smtp_path"])
-    letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
-    proxies = load_list(CONFIG["proxies_path"])
-
-    if CONFIG["use_proxy"] and CONFIG["auto_validate_proxies"] and proxies:
-        proxies = validate_proxies(proxies)
-    if not smtps:
-        console.print("[bold red]✘ No SMTP configurations found.[/bold red]")
-        return
-
-    smtp_idx, subject_idx, link_idx, letter_idx, proxy_idx = 0, 0, 0, 0, 0
-
+    emails, subjects, links = load_list(CONFIG["email_list_path"]), load_list(CONFIG["subjects_path"]), load_list(CONFIG["links_path"])
+    smtps, letters, proxies = load_smtp(CONFIG["smtp_path"]), [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")], load_list(CONFIG["proxies_path"])
+    if CONFIG["use_proxy"] and CONFIG["auto_validate_proxies"] and proxies: proxies = validate_proxies(proxies)
+    if not smtps: console.print("[bold red]✘ No SMTP configurations found.[/bold red]"); return
+    smtp_idx, subject_idx, link_idx, letter_idx, proxy_idx, success_since_test = 0, 0, 0, 0, 0, 0
     with Live(get_stats_table(), refresh_per_second=4) as live:
         for email in emails:
-            attempts = 0
-            sent = False
-
+            attempts, sent = 0, False
             while attempts < CONFIG["retry_attempts"] and not sent:
                 try:
                     smtp_cfg = smtps[smtp_idx]
                     current_proxy = proxies[proxy_idx] if CONFIG["use_proxy"] and proxies else None
-                    stats["current_proxy"] = current_proxy or "Direct"
-                    live.update(get_stats_table())
-
-                    subject_raw = subjects[subject_idx] if subjects else "Security Update"
-                    link = links[link_idx] if links else ""
-                    letter_file = os.path.join(CONFIG["letters_dir"], letters[letter_idx]) if letters else None
-
-                    replacements = {"-email-": email, "-emailuser-": email.split("@")[0], "-emaildomain-": email.split("@")[1], "-emaildomainname-": email.split("@")[1].split(".")[0], "-link-": link}
-
+                    stats["current_proxy"] = current_proxy or "Direct"; live.update(get_stats_table())
+                    replacements = {"-email-": email, "-emailuser-": email.split("@")[0], "-emaildomain-": email.split("@")[1], "-emaildomainname-": email.split("@")[1].split(".")[0], "-link-": links[link_idx] if links else ""}
                     msg = MIMEMultipart()
-                    msg["Subject"] = replace_tags(subject_raw, replacements)
-                    from_email = CONFIG["use_custom_from"] and smtp_cfg["from"] or smtp_cfg["user"]
-                    msg["From"] = f'"{replace_tags(CONFIG["sender_name"], replacements)}" <{from_email}>'
+                    msg["Subject"] = replace_tags(subjects[subject_idx] if subjects else "Security Update", replacements)
+                    msg["From"] = f'"{replace_tags(CONFIG["sender_name"], replacements)}" <{CONFIG["use_custom_from"] and smtp_cfg["from"] or smtp_cfg["user"]}>'
                     msg["To"] = email
                     msg["X-Mailer"], msg["X-Priority"], msg["Importance"], msg["X-MSMail-Priority"], msg["X-Originating-IP"] = "Microsoft Outlook 16.0", "1 (Highest)", "High", "High", "127.0.0.1"
-
                     content = "Default Content"
-                    if letter_file:
-                        with open(letter_file, "r", encoding="utf-8") as f: content = f.read()
+                    if letters:
+                        with open(os.path.join(CONFIG["letters_dir"], letters[letter_idx]), "r", encoding="utf-8") as f: content = f.read()
                     msg.attach(MIMEText(replace_tags(content, replacements), "html"))
-
                     if CONFIG["attachment_type"] != "none":
                         with open(CONFIG["attachment_html_path"], "r", encoding="utf-8") as f: att_html = replace_tags(f.read(), replacements)
                         if CONFIG["minify_html"]: att_html = minify(att_html, remove_comments=True)
-                        filename = f"Document_{random.randint(1000,9999)}"
-                        if CONFIG["attachment_type"] == "pdf":
-                            att_data, ext, c_type = html_to_pdf(att_html), ".pdf", "application/pdf"
-                        elif CONFIG["attachment_type"] == "png":
-                            att_data, ext, c_type = html_to_png(att_html), ".png", "image/png"
-                        else:
-                            att_data, ext, c_type = att_html.encode(), ".html", "text/html"
-                        if CONFIG["encrypt_attachment"]:
-                            att_data, ext = encrypt_attachment(att_data, CONFIG["encryption_password"]), ext + ".enc"
-                        part = MIMEBase(*c_type.split("/"))
-                        part.set_payload(att_data)
-                        encoders.encode_base64(part)
-                        part.add_header("Content-Disposition", f'attachment; filename="{filename}{ext}"')
-                        msg.attach(part)
-                        if CONFIG["sign_attachment"]:
-                            sig = hashlib.sha256(att_data).hexdigest()
-                            part_sig = MIMEBase("text", "plain")
-                            part_sig.set_payload(sig.encode())
-                            part_sig.add_header("Content-Disposition", f'attachment; filename="{filename}{ext}.sig"')
-                            msg.attach(part_sig)
+                        final_pdf_name = replace_tags(CONFIG["pdf_name"], replacements)
+                        filename = f"{final_pdf_name}_{random.randint(1000,9999)}"
+                        if CONFIG["attachment_type"] == "pdf": att_data, ext, c_type = html_to_pdf(att_html), ".pdf", "application/pdf"
+                        elif CONFIG["attachment_type"] == "png": att_data, ext, c_type = html_to_png(att_html), ".png", "image/png"
+                        else: att_data, ext, c_type = att_html.encode(), ".html", "text/html"
+                        if CONFIG["encrypt_attachment"]: att_data, ext = encrypt_attachment(att_data, CONFIG["encryption_password"]), ext + ".enc"
+                        part = MIMEBase(*c_type.split("/")); part.set_payload(att_data); encoders.encode_base64(part); part.add_header("Content-Disposition", f'attachment; filename="{filename}{ext}"'); msg.attach(part)
+                        if CONFIG["sign_attachment"]: sig = hashlib.sha256(att_data).hexdigest(); part_sig = MIMEBase("text", "plain"); part_sig.set_payload(sig.encode()); part_sig.add_header("Content-Disposition", f'attachment; filename="{filename}{ext}.sig"'); msg.attach(part_sig)
 
-                    def get_proxy_conn():
+                    def get_conn():
                         if current_proxy:
-                            parts = re.split(r'[:@/]+', current_proxy)
-                            return socks.create_connection((smtp_cfg["host"], smtp_cfg["port"]), proxy_type=socks.SOCKS5, proxy_addr=parts[-2], proxy_port=int(parts[-1]), timeout=30)
+                            p = parse_proxy(current_proxy)
+                            return socks.create_connection((smtp_cfg["host"], smtp_cfg["port"]), proxy_type=p["type"], proxy_addr=p["addr"], proxy_port=p["port"], proxy_username=p["user"], proxy_password=p["pass"], timeout=30)
                         return socket.create_connection((smtp_cfg["host"], smtp_cfg["port"]), timeout=30)
 
-                    conn = get_proxy_conn()
-                    server = smtplib.SMTP(timeout=30)
-                    server.sock, server._host = conn, smtp_cfg["host"]
+                    conn = get_conn(); server = smtplib.SMTP(timeout=30); server.sock, server._host = conn, smtp_cfg["host"]
                     server.ehlo_or_helo_if_needed()
-                    if server.has_extn('starttls'):
-                        server.starttls()
-                        server.ehlo_or_helo_if_needed()
-                    server.login(smtp_cfg["user"], smtp_cfg["pass"])
-                    server.send_message(msg)
-                    server.quit()
-                    stats["sent"], stats["success"], sent = stats["sent"] + 1, stats["success"] + 1, True
+                    if server.has_extn('starttls'): server.starttls(); server.ehlo_or_helo_if_needed()
+                    server.login(smtp_cfg["user"], smtp_cfg["pass"]); server.send_message(msg); server.quit()
+                    stats["sent"], stats["success"], sent, success_since_test = stats["sent"] + 1, stats["success"] + 1, True, success_since_test + 1
+                    if success_since_test >= CONFIG["test_every"]:
+                        try:
+                            test_msg = MIMEMultipart(); test_msg["Subject"], test_msg["From"], test_msg["To"] = f"[TEST] {msg['Subject']}", msg["From"], CONFIG["test_email"]
+                            for part in msg.get_payload(): test_msg.attach(part)
+                            s = smtplib.SMTP(smtp_cfg["host"], smtp_cfg["port"], timeout=30); s.starttls(); s.login(smtp_cfg["user"], smtp_cfg["pass"]); s.send_message(test_msg); s.quit()
+                        except: pass
+                        success_since_test = 0
                 except:
                     attempts += 1
-                    if attempts >= CONFIG["retry_attempts"]:
-                        stats["sent"], stats["failed"] = stats["sent"] + 1, stats["failed"] + 1
-                    else:
-                        smtp_idx = (smtp_idx + 1) % len(smtps)
-                        if proxies: proxy_idx = (proxy_idx + 1) % len(proxies)
-                        time.sleep(2)
-
-            smtp_idx = (smtp_idx + 1) % len(smtps)
-            if subjects: subject_idx = (subject_idx + 1) % len(subjects)
-            if links: link_idx = (link_idx + 1) % len(links)
-            if letters: letter_idx = (letter_idx + 1) % len(letters)
-            if proxies: proxy_idx = (proxy_idx + 1) % len(proxies)
-            time.sleep(CONFIG["delay"])
+                    if attempts >= CONFIG["retry_attempts"]: stats["sent"], stats["failed"] = stats["sent"] + 1, stats["failed"] + 1
+                    else: smtp_idx = (smtp_idx + 1) % len(smtps); proxy_idx = (proxy_idx + 1) % len(proxies) if proxies else 0; time.sleep(2)
+            if stats["success"] > 0 and stats["success"] % CONFIG["pause_every"] == 0:
+                console.print(f"\n[bold magenta][PAUSE][/bold magenta] Reached {stats['success']} successful sends. Pausing for {CONFIG['pause_time']}s..."); time.sleep(CONFIG["pause_time"])
+            smtp_idx = (smtp_idx + 1) % len(smtps); proxy_idx = (proxy_idx + 1) % len(proxies) if proxies else 0; subject_idx = (subject_idx + 1) % len(subjects) if subjects else 0; link_idx = (link_idx + 1) % len(links) if links else 0; letter_idx = (letter_idx + 1) % len(letters) if letters else 0; time.sleep(CONFIG["delay"])
 
 def run():
-    check_activation()
-    print_banner()
+    check_activation(); print_banner()
     console.print(Panel("[bold magenta]Settings Dashboard[/bold magenta]", box=box.SQUARE, style="bold cyan"))
     CONFIG["use_custom_from"] = console.input("[bold blue]Use Custom From Email? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["attachment_type"] = console.input("[bold blue]Attachment Type (pdf/png/html/none): [/bold blue]").lower()
     if CONFIG["attachment_type"] != "none":
+        CONFIG["pdf_name"] = console.input("[bold blue]Desired Attachment Filename (e.g. MyDoc): [/bold blue]") or "Document"
+    CONFIG["delay"] = float(console.input("[bold blue]Delay between emails (seconds): [/bold blue]") or 6.0)
+    CONFIG["pause_every"] = int(console.input("[bold blue]Pause every X successful sends: [/bold blue]") or 100)
+    CONFIG["pause_time"] = int(console.input("[bold blue]Pause time (seconds): [/bold blue]") or 300)
+    CONFIG["test_every"] = int(console.input("[bold blue]Send test email every X successful sends: [/bold blue]") or 100)
+    CONFIG["test_email"] = console.input("[bold blue]Test email address: [/bold blue]") or "serverbank@aol.com"
+    if CONFIG["attachment_type"] != "none":
         CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
-    console.print("\n[bold green]✔ Starting campaign with selected settings...[/bold green]\n")
-    time.sleep(2)
+    console.print("\n[bold green]✔ Starting campaign with selected settings...[/bold green]\n"); time.sleep(2)
     if not os.path.exists(CONFIG["letters_dir"]): os.makedirs(CONFIG["letters_dir"])
     send_emails()
 
-if __name__ == "__main__":
-    run()
+if __name__ == "__main__": run()

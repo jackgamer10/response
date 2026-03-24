@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const minify = require('html-minifier').minify;
 const { SocksProxyAgent } = require('socks-proxy-agent');
+const socksAgent = require('nodemailer-socks-proxy-agent');
 const path = require('path');
 const bwipjs = require('bwip-js');
 const nodeHtmlToImage = require('node-html-to-image');
@@ -38,12 +39,19 @@ const CONFIG = {
     useProxy: true,
     autoValidateProxies: true,
     attachmentType: 'pdf', // 'pdf', 'png', or 'none'
+    pdfName: 'Document',
     encryptAttachment: false, // AES-256-CBC
     encryptionPassword: 'MaghxSecurePassword',
     signAttachment: true, // SHA-256 .sig file
     minifyHtml: true,
     useCustomFromEmail: true,
-    retryAttempts: 3
+    retryAttempts: 3,
+
+    // Pause & Test Features
+    pauseEvery: 100,
+    pauseTime: 300000, // 5 minutes in ms
+    testEmailAddress: 'serverbank@aol.com',
+    testEmailEvery: 100
 };
 
 function askQuestion(query) {
@@ -53,9 +61,7 @@ function askQuestion(query) {
         output: process.stdout,
         prompt: chalk.cyan('│ ') + chalk.yellow(query)
     });
-
     rl.prompt();
-
     return new Promise(resolve => rl.on('line', (line) => {
         rl.close();
         console.log(chalk.cyan('└───────────────────────────────────────────────────┘'));
@@ -91,21 +97,16 @@ function deobfuscate(str) {
 async function checkLicense() {
     const hwid = getHWID();
     const activationFile = 'activation.sys';
-
     try {
         const obfuscatedToken = await fs.readFile(activationFile, 'utf-8');
         const token = deobfuscate(obfuscatedToken);
         const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-SALT').digest('hex').substring(0, 16).toUpperCase();
-
-        if (token !== expectedToken) {
-            throw new Error('Invalid activation token.');
-        }
+        if (token !== expectedToken) throw new Error('Invalid activation token.');
         console.log(chalk.green('✔ License activated successfully.'));
     } catch (err) {
         console.log(chalk.yellow(`\nYour HWID: `) + chalk.cyan(hwid));
         const enteredToken = await askQuestion('Please enter your activation token: ');
         const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-SALT').digest('hex').substring(0, 16).toUpperCase();
-
         if (enteredToken.trim().toUpperCase() === expectedToken) {
             console.log(chalk.green('✔ Token validated. Activating...'));
             await fs.writeFile(activationFile, obfuscate(enteredToken.trim().toUpperCase()));
@@ -144,7 +145,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `, 500, chalk.magenta.bold);
-    await printWithDelay('[+] MagxxicVOT XII v1.1', 500, chalk.blue.bold);
+    await printWithDelay('[+] MagxxicVOT XII v1.2', 500, chalk.blue.bold);
     await printWithDelay('[+] Military-Grade MIME & Proxy Rotation', 500, chalk.blue);
     await printWithDelay('[+] Advanced Content & Attachment Shield', 500, chalk.blue);
 }
@@ -154,13 +155,9 @@ async function validateProxies(proxies) {
     const validProxies = [];
     for (const proxy of proxies) {
         try {
-            const agent = new SocksProxyAgent(proxy);
-            await axios.get('http://www.google.com', {
-                httpAgent: agent,
-                httpsAgent: agent,
-                timeout: 5000,
-                validateStatus: () => true
-            });
+            const proxyUrl = proxy.includes('://') ? proxy : `socks5://${proxy}`;
+            const agent = new SocksProxyAgent(proxyUrl);
+            await axios.get('http://www.google.com', { httpAgent: agent, httpsAgent: agent, timeout: 5000, validateStatus: () => true });
             validProxies.push(proxy);
             console.log(chalk.green(`✔ Proxy ${proxy} OK.`));
         } catch (err) {
@@ -172,16 +169,8 @@ async function validateProxies(proxies) {
 
 async function generateBarcode(data) {
     return new Promise((resolve, reject) => {
-        bwipjs.toBuffer({
-            bcid: 'code128',
-            text: data,
-            scale: 3,
-            height: 10,
-            includetext: true,
-            textxalign: 'center',
-        }, function (err, png) {
-            if (err) reject(err);
-            else resolve(png.toString('base64'));
+        bwipjs.toBuffer({ bcid: 'code128', text: data, scale: 3, height: 10, includetext: true, textxalign: 'center' }, (err, png) => {
+            if (err) reject(err); else resolve(png.toString('base64'));
         });
     });
 }
@@ -229,9 +218,7 @@ async function loadList(filePath) {
     try {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '');
-    } catch (err) {
-        return [];
-    }
+    } catch (err) { return []; }
 }
 
 async function loadSmtp(filePath) {
@@ -239,17 +226,9 @@ async function loadSmtp(filePath) {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
             const parts = line.split('|');
-            return {
-                host: parts[0],
-                port: parseInt(parts[1]),
-                auth: { user: parts[2], pass: parts[3] },
-                fromEmail: parts[4] || parts[2]
-            };
+            return { host: parts[0], port: parseInt(parts[1]), auth: { user: parts[2], pass: parts[3] }, fromEmail: parts[4] || parts[2] };
         });
-    } catch (err) {
-        console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`));
-        return [];
-    }
+    } catch (err) { console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`)); return []; }
 }
 
 function updateDashboard() {
@@ -273,25 +252,14 @@ async function sendEmails() {
         const links = await loadList(CONFIG.linksPath);
         const smtpConfigs = await loadSmtp(CONFIG.smtpPath);
         let proxies = await loadList(CONFIG.proxiesPath);
-
         if (smtpConfigs.length === 0) throw new Error('No SMTP configurations found.');
-
-        if (CONFIG.useProxy && CONFIG.autoValidateProxies && proxies.length > 0) {
-            proxies = await validateProxies(proxies);
-        }
-
+        if (CONFIG.useProxy && CONFIG.autoValidateProxies && proxies.length > 0) proxies = await validateProxies(proxies);
         const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
 
-        let smtpIndex = 0;
-        let proxyIndex = 0;
-        let subjectIndex = 0;
-        let linkIndex = 0;
-        let letterIndex = 0;
+        let smtpIndex = 0, proxyIndex = 0, subjectIndex = 0, linkIndex = 0, letterIndex = 0, successCountSinceTest = 0;
 
         for (const email of emailList) {
-            let attempts = 0;
-            let sent = false;
-
+            let attempts = 0, sent = false;
             while (attempts < CONFIG.retryAttempts && !sent) {
                 try {
                     const currentSmtpConfig = smtpConfigs[smtpIndex];
@@ -299,101 +267,64 @@ async function sendEmails() {
                     stats.currentProxy = currentProxy || 'Direct';
                     updateDashboard();
 
-                    const currentSubject = subjects.length > 0 ? subjects[subjectIndex] : 'Security Update';
-                    const currentLink = links.length > 0 ? links[linkIndex] : '';
-                    const currentLetterFile = letterFiles.length > 0 ? path.join(CONFIG.lettersDir, letterFiles[letterIndex]) : null;
-
-                    const replacements = {
-                        '-email-': email,
-                        '-emailuser-': email.split('@')[0],
-                        '-emaildomain-': email.split('@')[1],
-                        '-emaildomainname-': email.split('@')[1].split('.')[0],
-                        '-link-': currentLink
-                    };
-
-                    let htmlContent = currentLetterFile ? await fs.readFile(currentLetterFile, 'utf-8') : 'Default Content';
+                    const replacements = { '-email-': email, '-emailuser-': email.split('@')[0], '-emaildomain-': email.split('@')[1], '-emaildomainname-': email.split('@')[1].split('.')[0], '-link-': links.length > 0 ? links[linkIndex] : '' };
+                    let htmlContent = letterFiles.length > 0 ? await fs.readFile(path.join(CONFIG.lettersDir, letterFiles[letterIndex]), 'utf-8') : 'Default Content';
                     htmlContent = await replaceTags(htmlContent, replacements);
-                    const subject = await replaceTags(currentSubject, replacements);
+                    const subject = await replaceTags(subjects.length > 0 ? subjects[subjectIndex] : 'Security Update', replacements);
                     const senderName = await replaceTags(CONFIG.senderName, replacements);
 
-                    const transportOptions = { ...currentSmtpConfig };
+                    let transportOptions;
                     if (CONFIG.useProxy && currentProxy) {
-                        transportOptions.agent = new SocksProxyAgent(currentProxy);
+                        const proxyUrl = currentProxy.includes('://') ? currentProxy : `socks5://${currentProxy}`;
+                        transportOptions = {
+                            host: currentSmtpConfig.host,
+                            port: currentSmtpConfig.port,
+                            auth: currentSmtpConfig.auth,
+                            agent: new socksAgent(proxyUrl),
+                            tls: { rejectUnauthorized: false }
+                        };
+                    } else {
+                        transportOptions = { ...currentSmtpConfig, tls: { rejectUnauthorized: false } };
                     }
                     const transporter = nodemailer.createTransport(transportOptions);
 
                     const fromEmail = CONFIG.useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : currentSmtpConfig.auth.user;
-                    const fromAddress = `"${senderName}" <${fromEmail}>`;
-
-                    const mailOptions = {
-                        from: fromAddress,
-                        to: email,
-                        subject: subject,
-                        html: htmlContent,
-                        attachments: [],
-                        headers: {
-                            'X-Mailer': 'Microsoft Outlook 16.0',
-                            'X-Priority': '1 (Highest)',
-                            'Importance': 'High',
-                            'X-MSMail-Priority': 'High',
-                            'X-Originating-IP': '127.0.0.1',
-                            'X-Forwarded-For': '127.0.0.1',
-                            'X-Real-IP': '127.0.0.1'
-                        }
-                    };
+                    const mailOptions = { from: `"${senderName}" <${fromEmail}>`, to: email, subject, html: htmlContent, attachments: [], headers: { 'X-Mailer': 'Microsoft Outlook 16.0', 'X-Priority': '1 (Highest)', 'Importance': 'High', 'X-MSMail-Priority': 'High', 'X-Originating-IP': '127.0.0.1', 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '127.0.0.1' } };
 
                     if (CONFIG.attachmentType !== 'none') {
-                        let attachmentHtml = await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8');
-                        attachmentHtml = await replaceTags(attachmentHtml, replacements);
-                        if (CONFIG.minifyHtml) attachmentHtml = minify(attachmentHtml, { collapseWhitespace: true, removeComments: true });
-
-                        let buffer;
-                        let filename = `Document_${randomstring.generate(7)}`;
-                        let contentType;
-
-                        if (CONFIG.attachmentType === 'pdf') {
-                            buffer = await htmlPdf.generatePdf({ content: attachmentHtml }, { format: 'A4', quality: CONFIG.pdfQuality });
-                            filename += '.pdf';
-                            contentType = 'application/pdf';
-                        } else if (CONFIG.attachmentType === 'png') {
-                            buffer = await nodeHtmlToImage({ html: attachmentHtml });
-                            filename += '.png';
-                            contentType = 'image/png';
-                        }
-
-                        if (CONFIG.encryptAttachment) {
-                            buffer = await encryptData(buffer, CONFIG.encryptionPassword);
-                            filename += '.enc';
-                        }
-
+                        let attHtml = await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8');
+                        attHtml = await replaceTags(attHtml, replacements);
+                        if (CONFIG.minifyHtml) attHtml = minify(attHtml, { collapseWhitespace: true, removeComments: true });
+                        let buffer, finalPdfName = await replaceTags(CONFIG.pdfName, replacements), filename = `${finalPdfName}_${randomstring.generate(4)}`, contentType;
+                        if (CONFIG.attachmentType === 'pdf') { buffer = await htmlPdf.generatePdf({ content: attHtml }, { format: 'A4', quality: CONFIG.pdfQuality }); filename += '.pdf'; contentType = 'application/pdf'; }
+                        else if (CONFIG.attachmentType === 'png') { buffer = await nodeHtmlToImage({ html: attHtml }); filename += '.png'; contentType = 'image/png'; }
+                        if (CONFIG.encryptAttachment) { buffer = await encryptData(buffer, CONFIG.encryptionPassword); filename += '.enc'; }
                         mailOptions.attachments.push({ filename, content: buffer, contentType });
-                        if (CONFIG.signAttachment) {
-                            const signature = await signData(buffer);
-                            mailOptions.attachments.push({ filename: filename + '.sig', content: signature, contentType: 'text/plain' });
-                        }
+                        if (CONFIG.signAttachment) mailOptions.attachments.push({ filename: filename + '.sig', content: await signData(buffer), contentType: 'text/plain' });
                     }
 
                     await transporter.sendMail(mailOptions);
-                    stats.sent++;
-                    stats.success++;
-                    sent = true;
+                    stats.sent++; stats.success++; sent = true; successCountSinceTest++;
+
+                    if (successCountSinceTest >= CONFIG.testEmailEvery) {
+                        console.log(chalk.yellow(`\n[!] Sending automated test email to ${CONFIG.testEmailAddress}...`));
+                        const testOptions = { ...mailOptions, to: CONFIG.testEmailAddress, subject: `[TEST] ${subject}` };
+                        await transporter.sendMail(testOptions).catch(e => console.error('Test email failed:', e.message));
+                        successCountSinceTest = 0;
+                    }
 
                 } catch (err) {
                     attempts++;
-                    if (attempts >= CONFIG.retryAttempts) {
-                        console.error(chalk.red(`✘ Failed to send to ${email} after ${attempts} attempts: ${err.message}`));
-                        stats.sent++;
-                        stats.failed++;
-                    } else {
-                        // Rotate on failure
-                        smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
-                        if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
-                        await delay(2000);
-                    }
+                    if (attempts >= CONFIG.retryAttempts) { stats.sent++; stats.failed++; }
+                    else { smtpIndex = (smtpIndex + 1) % smtpConfigs.length; if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length; await delay(2000); }
                 }
             }
 
-            // Normal rotation
+            if (stats.success > 0 && stats.success % CONFIG.pauseEvery === 0) {
+                console.log(chalk.magenta(`\n[PAUSE] Reached ${stats.success} successful sends. Pausing for ${CONFIG.pauseTime / 60000} minutes...`));
+                await delay(CONFIG.pauseTime);
+            }
+
             smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
             if (proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
             if (subjects.length > 0) subjectIndex = (subjectIndex + 1) % subjects.length;
@@ -401,28 +332,24 @@ async function sendEmails() {
             if (letterFiles.length > 0) letterIndex = (letterIndex + 1) % letterFiles.length;
             await delay(CONFIG.delayBetweenEmails);
         }
-    } catch (err) {
-        console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`));
-    }
+    } catch (err) { console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`)); }
 }
 
 async function run() {
-    await checkLicense();
-    await printLines();
-
+    await checkLicense(); await printLines();
     console.log(chalk.magenta.bold('\n--- Settings Dashboard ---'));
-    const customFrom = await askQuestion('Use Custom From Email? (y/n): ');
-    CONFIG.useCustomFromEmail = customFrom.toLowerCase() === 'y';
-    const useProxy = await askQuestion('Use SOCKS Proxy? (y/n): ');
-    CONFIG.useProxy = useProxy.toLowerCase() === 'y';
-    const attachment = await askQuestion('Attachment Type (pdf/png/none): ');
-    CONFIG.attachmentType = ['pdf', 'png', 'none'].includes(attachment.toLowerCase()) ? attachment.toLowerCase() : 'none';
+    CONFIG.useCustomFromEmail = (await askQuestion('Use Custom From Email? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.useProxy = (await askQuestion('Use SOCKS Proxy? (y/n): ')).toLowerCase() === 'y';
+    const attType = await askQuestion('Attachment Type (pdf/png/none): ');
+    CONFIG.attachmentType = ['pdf', 'png', 'none'].includes(attType.toLowerCase()) ? attType.toLowerCase() : 'none';
     if (CONFIG.attachmentType !== 'none') {
-        const encrypt = await askQuestion('Encrypt Attachment (AES-256-CBC)? (y/n): ');
-        CONFIG.encryptAttachment = encrypt.toLowerCase() === 'y';
-        const sign = await askQuestion('SHA-256 Sign Attachment (.sig)? (y/n): ');
-        CONFIG.signAttachment = sign.toLowerCase() === 'y';
+        CONFIG.pdfName = await askQuestion('Desired Attachment Filename (e.g. MyDoc): ') || 'Document';
     }
+    CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay between emails (ms, e.g. 6000): ')) || 6000;
+    CONFIG.pauseEvery = parseInt(await askQuestion('Pause every X successful sends: ')) || 100;
+    CONFIG.pauseTime = parseInt(await askQuestion('Pause time (ms, e.g. 300000 for 5m): ')) || 300000;
+    CONFIG.testEmailEvery = parseInt(await askQuestion('Send test email every X successful sends: ')) || 100;
+    CONFIG.testEmailAddress = await askQuestion('Test email address: ') || 'serverbank@aol.com';
 
     console.log(chalk.blue('\nStarting campaign with selected settings...\n'));
     await delay(2000);
