@@ -19,12 +19,12 @@ echo [+] Python detected.
 :: Ensure pip is available and updated
 echo [+] Verifying pip...
 python -m ensurepip --default-pip >nul 2>&1
-python -m pip install --upgrade pip >nul 2>&1
+python -m pip install --upgrade pip setuptools wheel --user --prefer-binary >nul 2>&1
 
 :: Install dependencies
 echo [+] Installing required dependencies...
 echo.
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt --user --prefer-binary
 
 if errorlevel 1 (
     echo.

@@ -25,11 +25,6 @@ from rich.panel import Panel
 from rich.layout import Layout
 from rich import box
 import socks
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-from xhtml2pdf import pisa
-from html2image import HtmlToImage
-from htmlmin import minify
 from urllib.parse import urlparse
 
 # Initialize Console
@@ -137,13 +132,19 @@ def replace_tags(text, replacements):
     return new_text
 
 def encrypt_attachment(data, password):
-    key = hashlib.scrypt(password.encode(), salt=b'salt', n=16384, r=8, p=1, dklen=32)
-    iv = os.urandom(16)
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    encryptor = cipher.encryptor()
-    pad_len = 16 - (len(data) % 16)
-    padded_data = data + bytes([pad_len] * pad_len)
-    return iv + encryptor.update(padded_data) + encryptor.finalize()
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.backends import default_backend
+        key = hashlib.scrypt(password.encode(), salt=b'salt', n=16384, r=8, p=1, dklen=32)
+        iv = os.urandom(16)
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        pad_len = 16 - (len(data) % 16)
+        padded_data = data + bytes([pad_len] * pad_len)
+        return iv + encryptor.update(padded_data) + encryptor.finalize()
+    except ImportError:
+        console.print("[bold red]✘ Error: 'cryptography' module not found. Please run setup.bat.[/bold red]")
+        return data
 
 def get_stats_table():
     table = Table(box=box.MINIMAL_DOUBLE_HEAD, expand=True, border_style="cyan")
@@ -195,19 +196,29 @@ def validate_proxies(proxies):
     return valid
 
 def html_to_pdf(html_content):
-    result = BytesIO()
-    pisa.CreatePDF(html_content, dest=result)
-    return result.getvalue()
+    try:
+        from xhtml2pdf import pisa
+        result = BytesIO()
+        pisa.CreatePDF(html_content, dest=result)
+        return result.getvalue()
+    except ImportError:
+        console.print("[bold red]✘ Error: 'xhtml2pdf' module not found. Please run setup.bat.[/bold red]")
+        return html_content.encode()
 
 def html_to_png(html_content):
-    hti = HtmlToImage()
-    temp_html, out_png = "temp_att.html", "temp_att.png"
-    with open(temp_html, "w", encoding="utf-8") as f: f.write(html_content)
-    hti.screenshot(html_file=temp_html, save_as=out_png)
-    with open(out_png, "rb") as f: data = f.read()
-    if os.path.exists(temp_html): os.remove(temp_html)
-    if os.path.exists(out_png): os.remove(out_png)
-    return data
+    try:
+        from html2image import HtmlToImage
+        hti = HtmlToImage()
+        temp_html, out_png = "temp_att.html", "temp_att.png"
+        with open(temp_html, "w", encoding="utf-8") as f: f.write(html_content)
+        hti.screenshot(html_file=temp_html, save_as=out_png)
+        with open(out_png, "rb") as f: data = f.read()
+        if os.path.exists(temp_html): os.remove(temp_html)
+        if os.path.exists(out_png): os.remove(out_png)
+        return data
+    except ImportError:
+        console.print("[bold red]✘ Error: 'html2image' module not found. Please run setup.bat.[/bold red]")
+        return html_content.encode()
 
 def send_emails():
     emails, subjects, links = load_list(CONFIG["email_list_path"]), load_list(CONFIG["subjects_path"]), load_list(CONFIG["links_path"])
@@ -235,7 +246,10 @@ def send_emails():
                     msg.attach(MIMEText(replace_tags(content, replacements), "html"))
                     if CONFIG["attachment_type"] != "none":
                         with open(CONFIG["attachment_html_path"], "r", encoding="utf-8") as f: att_html = replace_tags(f.read(), replacements)
-                        if CONFIG["minify_html"]: att_html = minify(att_html, remove_comments=True)
+                        try:
+                            from htmlmin import minify
+                            if CONFIG["minify_html"]: att_html = minify(att_html, remove_comments=True)
+                        except ImportError: pass
                         filename = replace_tags(CONFIG["pdf_name"], replacements)
                         if CONFIG["attachment_type"] == "pdf": att_data, ext, c_type = html_to_pdf(att_html), ".pdf", "application/pdf"
                         elif CONFIG["attachment_type"] == "png": att_data, ext, c_type = html_to_png(att_html), ".png", "image/png"
