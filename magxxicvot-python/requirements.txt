@@ -1,0 +1,9 @@
+rich
+requests
+python-barcode
+Pillow
+PySocks
+cryptography
+xhtml2pdf
+html2image
+htmlmin

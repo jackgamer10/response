@@ -1,0 +1,1 @@
+smtp.example.com|587|user@example.com|password|from@example.com
