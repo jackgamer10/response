@@ -8,7 +8,6 @@ const crypto = require('crypto');
 const readline = require('readline');
 const minify = require('html-minifier').minify;
 const { SocksProxyAgent } = require('socks-proxy-agent');
-const socksAgent = require('nodemailer-socks-proxy-agent');
 const path = require('path');
 const bwipjs = require('bwip-js');
 const nodeHtmlToImage = require('node-html-to-image');
@@ -280,7 +279,7 @@ async function sendEmails() {
                             host: currentSmtpConfig.host,
                             port: currentSmtpConfig.port,
                             auth: currentSmtpConfig.auth,
-                            agent: new socksAgent(proxyUrl),
+                            agent: new SocksProxyAgent(proxyUrl),
                             tls: { rejectUnauthorized: false }
                         };
                     } else {
