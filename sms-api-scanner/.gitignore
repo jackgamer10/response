@@ -1,0 +1,4 @@
+found_keys.log
+targets.txt
+*.pyc
+__pycache__/
