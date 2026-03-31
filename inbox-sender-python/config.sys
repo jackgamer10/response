@@ -1,0 +1,12 @@
+{
+    "rotateLetters": true,
+    "autoShortenLinks": false,
+    "delayBetweenEmails": 2000,
+    "pauseEvery": 50,
+    "pauseTime": 30000,
+    "encryptionMethod": "ZIP",
+    "encryptionPassword": "military_grade_password",
+    "signAttachment": true,
+    "sendAttachment": true,
+    "attachmentType": "PDF"
+}

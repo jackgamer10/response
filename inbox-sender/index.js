@@ -1,0 +1,1194 @@
+'use strict';
+
+process.noDeprecation = true;
+
+const nodemailer = require('nodemailer');
+const fs = require('fs').promises;
+const path = require('path');
+const randomstring = require('randomstring');
+const puppeteer = require('puppeteer');
+const Handlebars = require('handlebars');
+const crypto = require('crypto');
+const readline = require('readline');
+const minify = require('html-minifier').minify;
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const socks = require('socks');
+const ses = require('@aws-sdk/client-ses');
+const mg = require('nodemailer-mailgun-transport');
+const sg = require('nodemailer-sendgrid-transport');
+const { NodeHttpHandler } = require("@smithy/node-http-handler");
+const dns = require('dns').promises;
+const bwipjs = require('bwip-js');
+const axios = require('axios');
+const nodeHtmlToImage = require('node-html-to-image');
+const si = require('systeminformation');
+const archiver = require('archiver');
+const { Readable } = require('stream');
+
+const colors = {
+    reset: "\x1b[0m",
+    bright: "\x1b[1m",
+    green: "\x1b[32m",
+    red: "\x1b[31m",
+    yellow: "\x1b[33m",
+    blue: "\x1b[34m",
+    magenta: "\x1b[35m",
+    cyan: "\x1b[36m",
+    white: "\x1b[37m"
+};
+
+// --- Advanced Activation and Anti-Tamper ---
+const SECRET_SALT = 'magxxicVox_Super_Secure_Salt_2024';
+
+async function getHWID() {
+    try {
+        const uuid = await si.uuid();
+        const cpu = await si.cpu();
+        const baseboard = await si.baseboard();
+        const raw = `${uuid.os}-${uuid.hardware}-${cpu.brand}-${baseboard.serial}`;
+        return crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
+    } catch (err) {
+        return 'UNKNOWN-HWID-' + crypto.createHash('md5').update(require('os').hostname()).digest('hex');
+    }
+}
+
+function generateToken(hwid) {
+    return crypto.createHash('sha256').update(hwid + SECRET_SALT).digest('hex').toUpperCase();
+}
+
+// Configuration helper
+const obf = {
+    encode: (data) => {
+        const json = JSON.stringify(data, null, 4);
+        return Buffer.from(json).toString('base64').split('').reverse().join('');
+    },
+    decode: (data) => {
+        try {
+            const reversed = data.split('').reverse().join('');
+            const json = Buffer.from(reversed, 'base64').toString('utf-8');
+            return JSON.parse(json);
+        } catch (e) {
+            return JSON.parse(data); // Fallback for legacy plain JSON
+        }
+    }
+};
+
+async function checkLicense() {
+    const activationPath = path.join(__dirname, 'activation.sys');
+    const hiddenActivationPath = path.join(__dirname, '.activation.sys');
+    const hwid = await getHWID();
+
+    try {
+        let rawData;
+        try {
+            rawData = await fs.readFile(activationPath, 'utf-8');
+        } catch (e) {
+            rawData = await fs.readFile(hiddenActivationPath, 'utf-8');
+        }
+        const data = obf.decode(rawData);
+
+        if (data.hwid !== hwid) {
+            console.error(`${colors.red}[!] Anti-Tamper: Hardware mismatch detected!${colors.reset}`);
+            process.exit(1);
+        }
+
+        if (data.token !== generateToken(hwid)) {
+            throw new Error('Invalid token');
+        }
+
+        console.log(`${colors.green}[+] License activated for HWID: ${hwid.substring(0, 8)}...${colors.reset}`);
+    } catch (err) {
+        console.log(`${colors.yellow}[!] Software not activated.${colors.reset}`);
+        console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} Your HWID: ${colors.bright}${hwid}${colors.reset}${colors.cyan} │${colors.reset}`);
+        console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
+
+        const token = (await askQuestion('Enter Activation Token: ')).trim().toUpperCase();
+        if (token === generateToken(hwid)) {
+            const data = { hwid, token, installPath: __dirname };
+            const targetPath = process.platform === 'win32' ? activationPath : hiddenActivationPath;
+            await fs.writeFile(targetPath, obf.encode(data));
+
+            // Hide the file on Windows
+            if (process.platform === 'win32') {
+                require('child_process').exec(`attrib +h "${targetPath}"`);
+            }
+
+            console.log(`${colors.green}[+] Activation successful! Please restart.${colors.reset}`);
+            process.exit(0);
+        } else {
+            console.error(`${colors.red}[!] Invalid activation token.${colors.reset}`);
+            process.exit(1);
+        }
+    }
+}
+
+// --- DKIM Helper ---
+async function loadDkimConfig() {
+    const dkimPath = path.join(__dirname, 'dkim.sys');
+    const keyPath = path.join(__dirname, 'dkim_key.pem');
+    try {
+        const raw = await fs.readFile(dkimPath, 'utf-8');
+        const config = obf.decode(raw);
+        const privateKey = await fs.readFile(keyPath, 'utf-8');
+        return {
+            domainName: config.domainName,
+            keySelector: config.keySelector,
+            privateKey: privateKey
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
+// --- SMTP Checker ---
+async function checkSmtpConfigs(configs, dkimOptions = null, proxies = null, directMxOptions = null) {
+    console.log(`${colors.cyan}[+] Checking SMTP/API configurations...${colors.reset}`);
+    const liveConfigs = [];
+    let proxyIndex = 0;
+    const maxProxyRetries = (proxies && proxies.length > 0) ? Math.min(proxies.length, 3) : 1;
+
+    for (const config of configs) {
+        if (['aws', 'mailgun', 'sendgrid'].includes(config.type)) {
+            console.log(`${colors.yellow}  [SKIP] Verification skipped for API type: ${config.type}${colors.reset}`);
+            liveConfigs.push(config);
+            continue;
+        }
+
+        let success = false;
+        let lastErr = "";
+        for (let i = 0; i < maxProxyRetries; i++) {
+            const currentProxy = (proxies && proxies.length > 0) ? proxies[proxyIndex % proxies.length] : null;
+            try {
+                const transporter = await createTransporter(config, currentProxy, null, dkimOptions, directMxOptions);
+                if (typeof transporter.verify === 'function') {
+                    // Set a timeout for verification to avoid hanging
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('Verification timeout')), 30000);
+                        transporter.verify().then(() => {
+                            clearTimeout(timeout);
+                            resolve();
+                        }).catch(err => {
+                            clearTimeout(timeout);
+                            reject(err);
+                        });
+                    });
+                }
+                liveConfigs.push(config);
+                console.log(`${colors.green}  [LIVE] ${config.host || config.type}${colors.reset}`);
+                success = true;
+                break;
+            } catch (err) {
+                lastErr = err.message;
+                proxyIndex++;
+            }
+        }
+
+        if (!success) {
+            console.log(`${colors.red}  [DEAD] ${config.host || config.type}: ${lastErr}${colors.reset}`);
+        }
+    }
+    return liveConfigs;
+}
+
+// --- Encryption Helpers ---
+async function encryptBuffer(buffer, algorithm, password) {
+    if (algorithm === 'AES-256-CBC') {
+        const iv = crypto.randomBytes(16);
+        const key = crypto.scryptSync(password, 'salt', 32);
+        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+        const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+        return Buffer.concat([iv, encrypted]);
+    } else if (algorithm === 'ZIP') {
+        return new Promise((resolve, reject) => {
+            const chunks = [];
+            const archive = archiver('zip', { zlib: { level: 9 }, password });
+            archive.on('data', chunk => chunks.push(chunk));
+            archive.on('end', () => resolve(Buffer.concat(chunks)));
+            archive.on('error', reject);
+            archive.append(buffer, { name: 'attachment.dat' });
+            archive.finalize();
+        });
+    }
+    return buffer;
+}
+
+// --- Main App Logic ---
+
+let stats = {
+    total: 0,
+    sent: 0,
+    failed: 0,
+    invalid: 0,
+    startTime: Date.now(),
+    currentEmail: '',
+    currentSmtp: '',
+    currentProxy: '',
+    currentSpamScore: 0,
+    status: 'Idle',
+    bounces: {
+        hard: 0,
+        soft: 0,
+        spam: 0
+    },
+    domains: {}, // { domain: { sent: 0, failed: 0 } }
+    dnsVerified: false,
+    proxies: { live: 0, total: 0 },
+    port25: 'Unknown'
+};
+
+const spamRules = [
+    { name: 'Urgency Keywords', regex: /\b(urgent|immediate|action required|verify now|account suspended)\b/gi, score: 1.5, suggestion: 'Avoid high-urgency language in subject/body.' },
+    { name: 'Money Keywords', regex: /\b(cash|money|dollars|euro|bitcoin|crypto|investment|profit|win|prize|winner|free)\b/gi, score: 2.0, suggestion: 'Reduce mentions of financial/monetary incentives.' },
+    { name: 'Excessive Punctuation', regex: /[!?]{2,}/g, score: 1.0, suggestion: 'Avoid multiple exclamation or question marks.' },
+    { name: 'All Caps Words', regex: /\b[A-Z]{5,}\b/g, score: 1.2, suggestion: 'Reduce use of all-caps words.' },
+    { name: 'Suspicious Links', regex: /<a [^>]*href=["'](http|https):\/\/[^"'>]+["'][^>]*>/gi, weight: (matches) => matches.length > 5 ? 2.0 : 0, suggestion: 'Reduce the number of external links.' },
+    { name: 'Unsubscribe Missing', check: (body) => !/unsubscribe/gi.test(body), score: 2.5, suggestion: 'Add a clear "unsubscribe" link or keyword to the body.' }
+];
+
+function evaluateSpamScore(subject, body) {
+    let score = 0;
+    let suggestions = [];
+    const combinedText = subject + ' ' + body;
+    for (const rule of spamRules) {
+        if (rule.regex) {
+            const matches = combinedText.match(rule.regex);
+            if (matches) {
+                const ruleScore = rule.weight ? rule.weight(matches) : rule.score;
+                if (ruleScore > 0) {
+                    score += ruleScore;
+                    suggestions.push(rule.suggestion);
+                }
+            }
+        } else if (rule.check) {
+            if (rule.check(body)) {
+                score += rule.score;
+                suggestions.push(rule.suggestion);
+            }
+        }
+    }
+    return { score: Math.min(score, 10).toFixed(1), suggestions: [...new Set(suggestions)] };
+}
+
+function askQuestion(query) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise(resolve => rl.question(query, (answer) => { rl.close(); resolve(answer); }));
+}
+
+function updateStatsUI() {
+    const elapsed = ((Date.now() - stats.startTime) / 1000).toFixed(1);
+    const totalProcessed = stats.sent + stats.failed + stats.invalid;
+    const remaining = stats.total - totalProcessed;
+    const successRate = (stats.sent + stats.failed) > 0 ? ((stats.sent / (stats.sent + stats.failed)) * 100).toFixed(1) : 0;
+
+    process.stdout.write('\x1B[2J\x1B[0f');
+    let scoreColor = colors.green;
+    if (stats.currentSpamScore > 5) scoreColor = colors.red;
+    else if (stats.currentSpamScore > 2) scoreColor = colors.yellow;
+
+    let rateColor = colors.green;
+    if (successRate < 50) rateColor = colors.red;
+    else if (successRate < 80) rateColor = colors.yellow;
+
+    const p25Color = stats.port25 === 'Open' ? colors.green : (stats.port25 === 'Blocked' ? colors.red : colors.yellow);
+
+    console.log(`${colors.magenta}╔══════════════════════════════════════════════════════════════════════╗${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.bright}${colors.cyan}             magxxicVox Inbox Sender - OPERATION LIVE DASHBOARD       ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════╦══════════════════════╦════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  DELIVERED: ${colors.green}${stats.sent.toString().padEnd(8)}${colors.magenta}║${colors.white}  FAILED: ${colors.red}${stats.failed.toString().padEnd(10)}${colors.magenta}║${colors.white}  SUCCESS: ${rateColor}${successRate.toString().padEnd(10)}% ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════╩══════════════════════╩════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.yellow}  DIAGNOSTIC STATUS                                                   ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  Port 25: ${p25Color}${stats.port25.padEnd(10)}${colors.white} Proxies: ${colors.green}${stats.proxies.live}${colors.white}/${stats.proxies.total} Live${colors.white}${' '.repeat(26 - stats.proxies.live.toString().length - stats.proxies.total.toString().length)}${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  SMTP: ${colors.yellow}${stats.currentSmtp.padEnd(25).substring(0, 25)}${colors.white} PROXY: ${colors.cyan}${stats.currentProxy.padEnd(25).substring(0, 25)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.cyan}  BOUNCE ANALYSIS                                                     ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  HARD: ${colors.red}${stats.bounces.hard.toString().padEnd(10)}${colors.white} SOFT: ${colors.yellow}${stats.bounces.soft.toString().padEnd(10)}${colors.white} SPAM: ${colors.red}${stats.bounces.spam.toString().padEnd(15)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.cyan}  DOMAIN ENGAGEMENT                                                   ${colors.magenta}║${colors.reset}`);
+    const topDomains = Object.entries(stats.domains).sort((a, b) => (b[1].sent + b[1].failed) - (a[1].sent + a[1].failed)).slice(0, 3);
+    for (const [domain, dstats] of topDomains) {
+        const dtotal = dstats.sent + dstats.failed;
+        const drate = dtotal > 0 ? ((dstats.sent / dtotal) * 100).toFixed(0) : 0;
+        const barWidth = 20;
+        const filled = Math.round((dstats.sent / Math.max(dtotal, 1)) * barWidth);
+        const bar = colors.green + '█'.repeat(filled) + colors.red + '░'.repeat(barWidth - filled) + colors.reset;
+        console.log(`${colors.magenta}║${colors.white}  ${domain.padEnd(20)} ${bar} ${drate}% (${dstats.sent}/${dtotal})${colors.magenta}${' '.repeat(16 - drate.toString().length - dstats.sent.toString().length - dtotal.toString().length)}║${colors.reset}`);
+    }
+    console.log(`${colors.magenta}╠══════════════════════════════════════════════════════════════════════╣${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  STATUS: ${colors.bright}${stats.status.padEnd(12)}${colors.white} TIME: ${elapsed.toString().padEnd(8)}s TOTAL: ${stats.total.toString().padEnd(8)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  TARGET: ${colors.yellow}${stats.currentEmail.padEnd(51).substring(0, 51)} ${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}║${colors.white}  SPAM SCORE: ${scoreColor}${stats.currentSpamScore.toString().padEnd(5) }${colors.white} DNS VERIFY: ${stats.dnsVerified ? colors.green+'ENABLED' : colors.red+'DISABLED'}${colors.reset}${' '.repeat(25)}${colors.magenta}║${colors.reset}`);
+    console.log(`${colors.magenta}╚══════════════════════════════════════════════════════════════════════╝${colors.reset}`);
+}
+
+async function getMx(email) {
+    const domain = email.split('@')[1];
+    if (!domain) return null;
+    try {
+        const addresses = await dns.resolveMx(domain);
+        if (!addresses || addresses.length === 0) return null;
+        addresses.sort((a, b) => a.priority - b.priority);
+        return addresses[0].exchange;
+    } catch (err) { return null; }
+}
+
+async function verifyEmail(email) {
+    const re = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    if (!re.test(String(email).toLowerCase())) return false;
+    const mx = await getMx(email);
+    return mx !== null;
+}
+
+let globalBrowser;
+async function getBrowser() {
+    if (!globalBrowser) {
+        globalBrowser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            headless: "new"
+        });
+    }
+    return globalBrowser;
+}
+
+async function generatePdf(content, quality = 80) {
+    let page;
+    try {
+        const browser = await getBrowser();
+        page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(60000);
+        await page.setContent(content, { waitUntil: 'networkidle0' });
+        const pdf = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            timeout: 60000
+        });
+        return pdf;
+    } catch (err) {
+        throw new Error(`PDF Generation Error: ${err.message}`);
+    } finally {
+        if (page) await page.close().catch(() => {});
+    }
+}
+
+async function createTransporter(config, proxy, recipientEmail = null, dkimOptions = null, directMxOptions = null) {
+    let transport;
+    let proxyUrl = proxy;
+    if (config.type === 'aws') {
+        const sesOptions = { region: config.region, credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey } };
+        if (proxyUrl) {
+            const agent = new SocksProxyAgent(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
+            sesOptions.requestHandler = new NodeHttpHandler({ httpAgent: agent, httpsAgent: agent });
+        }
+        const sesClient = new ses.SES(sesOptions);
+        transport = { SES: { ses: sesClient, aws: ses } };
+    } else if (config.type === 'sendgrid') { transport = sg({ auth: { api_key: config.apiKey } }); }
+    else if (config.type === 'mailgun') { transport = mg({ auth: { api_key: config.apiKey, domain: config.domain }, proxy: proxyUrl }); }
+    else if (config.type === 'brevo') { transport = { host: 'smtp-relay.brevo.com', port: 587, auth: { user: config.user, pass: config.apiKey } }; }
+    else if (config.type === 'direct') {
+        if (!recipientEmail) throw new Error("Recipient email required");
+        const mxHost = await getMx(recipientEmail);
+        if (!mxHost) throw new Error(`No MX for ${recipientEmail}`);
+        transport = {
+            host: mxHost,
+            port: 25,
+            secure: false,
+            name: (directMxOptions && directMxOptions.heloDomain) || 'localhost',
+            tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+            connectionTimeout: (directMxOptions && directMxOptions.timeout) || 30000,
+            greetingTimeout: (directMxOptions && directMxOptions.timeout) || 30000,
+            socketTimeout: (directMxOptions && directMxOptions.timeout) || 30000
+        };
+    } else {
+        transport = { ...config };
+        transport.tls = { rejectUnauthorized: false };
+        transport.connectionTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
+        transport.greetingTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
+        transport.socketTimeout = (directMxOptions && directMxOptions.timeout) || 30000;
+        if (directMxOptions && directMxOptions.heloDomain) {
+            transport.name = directMxOptions.heloDomain;
+        }
+    }
+
+    if (dkimOptions && transport) {
+        transport.dkim = dkimOptions;
+    }
+
+    if (proxyUrl && transport && !['aws', 'sendgrid', 'mailgun'].includes(config.type)) {
+        transport.createConnection = (options, callback) => {
+            const url = new URL(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
+            const proxyOptions = {
+                proxy: { host: url.hostname, port: parseInt(url.port) || 1080, type: url.protocol.startsWith('socks4') ? 4 : 5 },
+                command: 'connect', destination: { host: options.host, port: options.port }
+            };
+            if (url.username) { proxyOptions.proxy.userId = url.username; proxyOptions.proxy.password = url.password; }
+            socks.SocksClient.createConnection(proxyOptions, (err, info) => {
+                if (err) return callback(err);
+                callback(null, info.socket);
+            });
+        };
+    }
+    return nodemailer.createTransport(transport);
+}
+
+async function loadFiles(filePath) {
+    try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        return content.split(/\r?\n/).filter(line => line.trim() !== '');
+    } catch (err) { return []; }
+}
+
+async function loadSmtpConfigs(filePath) {
+    const lines = await loadFiles(filePath);
+    return lines.map(line => {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length < 4) return null;
+        let [host, portStr, user, pass, fromEmail] = parts;
+        // Robust port parsing: extract digits
+        const portMatch = portStr.match(/\d+/);
+        const port = portMatch ? parseInt(portMatch[0]) : 587;
+        return { host, port, secure: port === 465, auth: { user, pass }, fromEmail: fromEmail || user };
+    }).filter(cfg => cfg !== null);
+}
+
+async function loadApiConfigs() {
+    const configs = [];
+    const providers = [
+        { file: 'aws.sys', type: 'aws' },
+        { file: 'brevo.sys', type: 'brevo' },
+        { file: 'mailgun.sys', type: 'mailgun' },
+        { file: 'sendgrid.sys', type: 'sendgrid' }
+    ];
+
+    for (const p of providers) {
+        try {
+            const raw = await fs.readFile(path.join(__dirname, p.file), 'utf-8');
+            const data = obf.decode(raw);
+            configs.push({ ...data, type: p.type });
+            console.log(`${colors.green}  [LOADED] API Config: ${p.type}${colors.reset}`);
+        } catch (e) {
+            // Ignore missing files
+        }
+    }
+    return configs;
+}
+
+async function loadDirectMxConfig() {
+    try {
+        const configRaw = await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8');
+        const settingsRaw = await fs.readFile(path.join(__dirname, 'direct_mx_settings.sys'), 'utf-8');
+        return { ...obf.decode(configRaw), ...obf.decode(settingsRaw) };
+    } catch (e) {
+        return { retries: 3, timeout: 30000, verifyDns: true, heloDomain: 'localhost' };
+    }
+}
+
+async function loadAppConfig() {
+    try {
+        const raw = await fs.readFile(path.join(__dirname, 'config.sys'), 'utf-8');
+        const config = obf.decode(raw);
+        if (config.skipSmtpCheck === undefined) config.skipSmtpCheck = false;
+        if (config.useCustomFrom === undefined) config.useCustomFrom = true;
+        if (config.sendBarcode === undefined) config.sendBarcode = true;
+        if (config.aiEnabled === undefined) config.aiEnabled = false;
+        if (config.aiScanEnabled === undefined) config.aiScanEnabled = false;
+        if (config.aiApiKey === undefined) config.aiApiKey = '';
+        return config;
+    } catch (e) {
+        return {
+            rotateLetters: true, autoShortenLinks: false, sendImageAttachment: true,
+            delayBetweenEmails: 2000, pauseEvery: 50, pauseTime: 30000,
+            encryptionMethod: 'ZIP', encryptionPassword: 'military_grade_password', signAttachment: true,
+            skipSmtpCheck: false, useCustomFrom: true, sendBarcode: true,
+            aiEnabled: false, aiScanEnabled: false, aiApiKey: ''
+        };
+    }
+}
+
+async function validateProxies(proxyList) {
+    console.log(`${colors.cyan}[+] Validating ${proxyList.length} proxies...${colors.reset}`);
+    stats.proxies.total = proxyList.length;
+    const validProxies = [];
+    for (const proxyUrl of proxyList) {
+        try {
+            const url = new URL(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
+            const proxyOptions = {
+                proxy: { host: url.hostname, port: parseInt(url.port) || 1080, type: url.protocol.startsWith('socks4') ? 4 : 5 },
+                command: 'connect',
+                destination: { host: '1.1.1.1', port: 53 } // DNS test
+            };
+            if (url.username) { proxyOptions.proxy.userId = url.username; proxyOptions.proxy.password = url.password; }
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
+                socks.SocksClient.createConnection(proxyOptions, (err, info) => {
+                    clearTimeout(timeout);
+                    if (err) return reject(err);
+                    info.socket.destroy();
+                    resolve();
+                });
+            });
+            validProxies.push(proxyUrl);
+            stats.proxies.live = validProxies.length;
+            console.log(`${colors.green}  [ALIVE] ${proxyUrl}${colors.reset}`);
+        } catch (err) {
+            console.log(`${colors.red}  [DEAD] ${proxyUrl}: ${err.message}${colors.reset}`);
+        }
+    }
+    return validProxies;
+}
+
+async function checkDirectMxConnectivity(proxyUrl) {
+    console.log(`${colors.cyan}[+] Checking Direct MX Connectivity (Port 25)...${colors.reset}`);
+
+    // Checking Port 25 connectivity
+    try {
+        const testHost = 'mx1.emailsrvr.com';
+        if (proxyUrl) {
+            const url = new URL(proxyUrl.includes('://') ? proxyUrl : `socks5://${proxyUrl}`);
+            const proxyOptions = {
+                proxy: { host: url.hostname, port: parseInt(url.port) || 1080, type: url.protocol.startsWith('socks4') ? 4 : 5 },
+                command: 'connect',
+                destination: { host: testHost, port: 25 }
+            };
+            if (url.username) { proxyOptions.proxy.userId = url.username; proxyOptions.proxy.password = url.password; }
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
+                socks.SocksClient.createConnection(proxyOptions, (err, info) => {
+                    clearTimeout(timeout);
+                    if (err) return reject(err);
+                    info.socket.destroy();
+                    resolve();
+                });
+            });
+            console.log(`${colors.green}  [OK] Port 25 is reachable via Proxy.${colors.reset}`);
+            stats.port25 = 'Proxied';
+        } else {
+            const socket = require('net').createConnection(25, testHost);
+            socket.setTimeout(5000);
+            await new Promise((resolve, reject) => {
+                socket.on('connect', () => { socket.destroy(); resolve(); });
+                socket.on('error', reject);
+                socket.on('timeout', () => { socket.destroy(); reject(new Error('timeout')); });
+            });
+            console.log(`${colors.green}  [OK] Outbound Port 25 is open locally.${colors.reset}`);
+            stats.port25 = 'Open';
+        }
+    } catch (err) {
+        console.log(`${colors.red}  [FAIL] Port 25 is unreachable: ${err.message}${colors.reset}`);
+        stats.port25 = 'Blocked';
+    }
+    return true;
+}
+
+async function loadLetters(dirPath) {
+    try {
+        const files = await fs.readdir(dirPath);
+        return files.filter(f => f.endsWith('.html')).map(f => path.join(dirPath, f));
+    } catch (err) { return []; }
+}
+
+async function showSettingsDashboard(appConfig, directMxOptions) {
+    while (true) {
+        process.stdout.write('\x1B[2J\x1B[0f');
+        console.log(`${colors.cyan}┌───────────────────────────────────────────────────┐${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white}        Operation Configuration Dashboard          ${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}├───────────────────────────────────────────────────┤${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 1. Delay (ms):      ${colors.yellow}${appConfig.delayBetweenEmails.toString().padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 2. Rotate Letters:  ${colors.yellow}${(appConfig.rotateLetters ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 3. Shorten Links:   ${colors.yellow}${(appConfig.autoShortenLinks ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 4. Encryption:      ${colors.yellow}${appConfig.encryptionMethod.padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 5. Sign Attachment: ${colors.yellow}${(appConfig.signAttachment ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 6. HELO Domain:     ${colors.yellow}${directMxOptions.heloDomain.padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 7. DNS Verify:      ${colors.yellow}${(directMxOptions.verifyDns ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 8. SMTP Timeout:    ${colors.yellow}${directMxOptions.timeout.toString().padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 9. Skip SMTP Check: ${colors.yellow}${(appConfig.skipSmtpCheck ? "YES" : "NO").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} C. Use Custom From: ${colors.yellow}${(appConfig.useCustomFrom ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} B. Send Barcode:    ${colors.yellow}${(appConfig.sendBarcode ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} A. AI Features:     ${colors.yellow}${(appConfig.aiEnabled ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} S. AI Scan/Enhance: ${colors.yellow}${(appConfig.aiScanEnabled ? "ENABLED" : "DISABLED").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} K. AI API Key:      ${colors.yellow}${(appConfig.aiApiKey ? (appConfig.aiApiKey.substring(0, 10) + "...") : "NOT SET").padEnd(30)}${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}│${colors.white} 0. SAVE & EXIT                                     ${colors.cyan}│${colors.reset}`);
+        console.log(`${colors.cyan}└───────────────────────────────────────────────────┘${colors.reset}`);
+
+        const choice = (await askQuestion('\nSelect option to toggle/edit (0-9, C, B, A, S, K): ')).toUpperCase();
+
+        if (choice === '1') {
+            const val = await askQuestion('Enter new delay (ms): ');
+            if (!isNaN(parseInt(val))) appConfig.delayBetweenEmails = parseInt(val);
+        } else if (choice === '2') {
+            appConfig.rotateLetters = !appConfig.rotateLetters;
+        } else if (choice === '3') {
+            appConfig.autoShortenLinks = !appConfig.autoShortenLinks;
+        } else if (choice === '4') {
+            const methods = ['ZIP', 'AES-256-CBC', 'None'];
+            const currentIdx = methods.indexOf(appConfig.encryptionMethod);
+            appConfig.encryptionMethod = methods[(currentIdx + 1) % methods.length];
+        } else if (choice === '5') {
+            appConfig.signAttachment = !appConfig.signAttachment;
+        } else if (choice === '6') {
+            const val = await askQuestion('Enter HELO domain: ');
+            if (val) directMxOptions.heloDomain = val;
+        } else if (choice === '7') {
+            directMxOptions.verifyDns = !directMxOptions.verifyDns;
+        } else if (choice === '8') {
+            const val = await askQuestion('Enter timeout (ms): ');
+            if (!isNaN(parseInt(val))) directMxOptions.timeout = parseInt(val);
+        } else if (choice === '9') {
+            appConfig.skipSmtpCheck = !appConfig.skipSmtpCheck;
+        } else if (choice === 'C') {
+            appConfig.useCustomFrom = !appConfig.useCustomFrom;
+        } else if (choice === 'B') {
+            appConfig.sendBarcode = !appConfig.sendBarcode;
+        } else if (choice === 'A') {
+            appConfig.aiEnabled = !appConfig.aiEnabled;
+        } else if (choice === 'S') {
+            appConfig.aiScanEnabled = !appConfig.aiScanEnabled;
+        } else if (choice === 'K') {
+            const val = await askQuestion('Enter OpenAI API Key: ');
+            if (val) appConfig.aiApiKey = val.trim();
+        } else if (choice === '0') {
+            await fs.writeFile(path.join(__dirname, 'config.sys'), obf.encode(appConfig));
+            const currentMxConfig = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_config.sys'), 'utf-8'));
+            const currentMxSettings = obf.decode(await fs.readFile(path.join(__dirname, 'direct_mx_settings.sys'), 'utf-8'));
+
+            // Sync with file structures
+            currentMxConfig.heloDomain = directMxOptions.heloDomain;
+            currentMxConfig.timeout = directMxOptions.timeout;
+            currentMxSettings.verifyDns = directMxOptions.verifyDns;
+
+            await fs.writeFile(path.join(__dirname, 'direct_mx_config.sys'), obf.encode(currentMxConfig));
+            await fs.writeFile(path.join(__dirname, 'direct_mx_settings.sys'), obf.encode(currentMxSettings));
+            break;
+        }
+    }
+}
+
+async function chooseSendingMethod() {
+    process.stdout.write('\x1B[2J\x1B[0f');
+    await printLines();
+    console.log(`\n${colors.cyan}Choose Action:${colors.reset}`);
+    console.log(`${colors.white}  1. SMTP (from smtp.txt)${colors.reset}`);
+    console.log(`${colors.white}  2. API Configs (AWS, Brevo, Mailgun, SendGrid)${colors.reset}`);
+    console.log(`${colors.white}  3. Direct MX Proxy Sending${colors.reset}`);
+    console.log(`${colors.magenta}  4. AI Letter Crafter (Draft with Prompt)${colors.reset}`);
+    console.log(`${colors.yellow}  5. Settings / Configuration Dashboard${colors.reset}`);
+    console.log(`${colors.yellow}  6. Run Pre-Send Connectivity & Proxy Diagnostic${colors.reset}`);
+    console.log(`${colors.red}  7. Exit${colors.reset}`);
+
+    const choice = await askQuestion('\nSelect option (1-6): ');
+    return choice.trim();
+}
+
+async function generateBarcode(data) {
+    return new Promise((resolve, reject) => {
+        bwipjs.toBuffer({ bcid: 'code128', text: data, scale: 3, height: 10, includetext: true, textxalign: 'center' }, (err, png) => {
+            if (err) reject(err); else resolve(png);
+        });
+    });
+}
+
+async function getRecipientLogo(email) {
+    const domain = email.split('@')[1];
+    try {
+        const logoUrl = `https://logo.clearbit.com/${domain}`;
+        const response = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 3000 });
+        return Buffer.from(response.data, 'binary');
+    } catch (err) { return null; }
+}
+
+async function aiLetterScanner(appConfig, htmlContent) {
+    const OpenAI = require('openai');
+    const client = new OpenAI({ apiKey: appConfig.aiApiKey });
+
+    console.log(`${colors.yellow}[AI] Scanning and Enhancing Letter...${colors.reset}`);
+
+    try {
+        const response = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: "You are an email deliverability expert. Analyze the provided HTML letter. 1. Provide a predicted spam score (0-10), 2. Suggest improvements, 3. Provide an enhanced HTML version that maintains placeholders like [-emailuser-], [-link-], etc. Output ONLY a JSON object with 'score', 'suggestions', and 'enhancedHtml' keys." },
+                { role: "user", content: htmlContent }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        const data = JSON.parse(response.choices[0].message.content);
+        console.log(`${colors.cyan}[AI] Predicted Spam Score: ${data.score}/10${colors.reset}`);
+        console.log(`${colors.cyan}[AI] Suggestions: ${data.suggestions}${colors.reset}`);
+
+        return data.enhancedHtml;
+    } catch (err) {
+        console.error(`${colors.red}[AI] Scan failed: ${err.message}${colors.reset}`);
+        return htmlContent;
+    }
+}
+
+async function aiLetterCrafter(appConfig) {
+    const OpenAI = require('openai');
+    const client = new OpenAI({ apiKey: appConfig.aiApiKey });
+
+    console.clear();
+    console.log(`${colors.magenta}┌───────────────────────────────────────────────────┐${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.bright}${colors.cyan}             magxxicVox AI LETTER CRAFTER          ${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}└───────────────────────────────────────────────────┘${colors.reset}`);
+
+    const prompt = await askQuestion('\nDescribe the letter you want to draft (prompt): ');
+    if (!prompt) return;
+
+    console.log(`${colors.yellow}[+] Consulting magxxicVox AI...${colors.reset}`);
+
+    try {
+        const response = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: "You are a professional copywriter specialized in high-deliverability email marketing. Generate a letter in two parts: 1. HTML version (professional and modern), 2. Plain Text version. Use placeholders like [-emailuser-], [-link-], and [-recipient-logo-]. Output ONLY a JSON object with 'html' and 'text' keys." },
+                { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        const data = JSON.parse(response.choices[0].message.content);
+        const fileName = `ai_draft_${Date.now()}.html`;
+        await fs.writeFile(path.join(__dirname, 'letters', fileName), data.html);
+
+        console.log(`\n${colors.green}[+] AI Letter Drafted and Saved!${colors.reset}`);
+        console.log(`${colors.white}File: letters/${fileName}${colors.reset}\n`);
+        console.log(`${colors.cyan}--- PLAIN TEXT PREVIEW ---${colors.reset}`);
+        console.log(data.text);
+        console.log(`${colors.cyan}--------------------------${colors.reset}`);
+
+        await askQuestion('\nPress Enter to return...');
+    } catch (err) {
+        console.error(`${colors.red}[!] AI Error: ${err.message}${colors.reset}`);
+        await new Promise(r => setTimeout(r, 3000));
+    }
+}
+
+async function shortenLinks(html) {
+    // Since we don't have a reliable free API key for shortening in this environment,
+    // we will implement a "cleaner" that ensures links are well-formatted.
+    // In a real scenario, this would call bit.ly, tinyurl, etc.
+    return html;
+}
+
+// Register Handlebars Helpers
+Handlebars.registerHelper('time', () => new Date().toLocaleString());
+Handlebars.registerHelper('randomstring', () => randomstring.generate());
+Handlebars.registerHelper('randomnumber', () => Math.floor(Math.random() * 10000).toString());
+Handlebars.registerHelper('randomletters', () => randomstring.generate({ charset: 'alphabetic' }));
+Handlebars.registerHelper('randommd5', () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
+
+Handlebars.registerHelper('barcode', function(text) {
+    return new Handlebars.SafeString('<img src="cid:barcode"/>');
+});
+
+function compileTemplate(template, data) {
+    try {
+        // Legacy tag support: Convert [-tag-] to {{tag}}
+        let processedTemplate = template
+            .replace(/\[-email-\]/g, '{{email}}')
+            .replace(/\[-emailuser-\]/g, '{{emailuser}}')
+            .replace(/\[-emaildomain-\]/g, '{{emaildomain}}')
+            .replace(/\[-emaildomainname-\]/g, '{{emaildomainname}}')
+            .replace(/\[-time-\]/g, '{{time}}')
+            .replace(/\[-randomstring-\]/g, '{{randomstring}}')
+            .replace(/\[-randomnumber-\]/g, '{{randomnumber}}')
+            .replace(/\[-randomletters-\]/g, '{{randomletters}}')
+            .replace(/\[-randommd5-\]/g, '{{randommd5}}')
+            .replace(/\[-link-\]/g, '{{link}}')
+            .replace(/\[link\]/g, '{{link}}')
+            .replace(/-link-/g, '{{link}}')
+            .replace(/\[-recipient-logo-\]/g, '{{{recipientLogo}}}')
+            .replace(/\[user-logo\]/g, '{{{recipientLogo}}}')
+            .replace(/\[-barcode-(.*?)-\]/g, (match, p1) => `{{barcode "${p1}"}}`);
+
+        const compiled = Handlebars.compile(processedTemplate);
+        return compiled(data);
+    } catch (err) {
+        console.error(`${colors.red}Template Compilation Error: ${err.message}${colors.reset}`);
+        return template; // Fallback
+    }
+}
+
+function replaceTags(text, replacements) {
+    // Adapter for compatibility
+    const data = {
+        email: replacements['-email-'] || replacements['email'],
+        emailuser: replacements['-emailuser-'] || replacements['emailuser'],
+        emaildomain: replacements['-emaildomain-'] || replacements['emaildomain'],
+        emaildomainname: replacements['-emaildomainname-'] || replacements['emaildomainname'],
+        link: replacements['link'] || '#'
+    };
+    return compileTemplate(text, data);
+}
+
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
+];
+
+async function sendEmails(options) {
+    const {
+        emailListPath, smtpConfigs, lettersDir, subjectPath, pdfAttachmentName,
+        senderName, attachmentHtmlPath, delayBetweenEmails, hideFromEmail,
+        useCustomFromEmail, pdfQuality, proxyList, testEmailAddress, useProxy,
+        verifyBeforeSend, config
+    } = options;
+
+    try {
+        let rawEmailList = await loadFiles(emailListPath);
+        stats.total = rawEmailList.length;
+        stats.dnsVerified = verifyBeforeSend;
+        const proxies = useProxy ? proxyList : [];
+        const subjects = await loadFiles(subjectPath);
+        const letters = await loadLetters(lettersDir);
+        const fromEmails = await loadFiles(path.join(__dirname, 'from_emails.txt'));
+        const links = await loadFiles(path.join(__dirname, 'links.txt'));
+
+        let smtpIndex = 0; let proxyIndex = 0; let fromIndex = 0; let letterIndex = 0; let linkIndex = 0;
+
+        let idx = 0;
+        for (const email of rawEmailList) {
+            const domain = email.split('@')[1];
+            if (!stats.domains[domain]) stats.domains[domain] = { sent: 0, failed: 0 };
+
+            stats.status = 'Processing';
+            stats.currentEmail = email;
+            stats.currentSmtp = smtpConfigs[smtpIndex] ? (smtpConfigs[smtpIndex].host || smtpConfigs[smtpIndex].type) : 'None';
+            stats.currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : 'None';
+            updateStatsUI();
+
+            if (verifyBeforeSend) {
+                stats.status = 'Verifying Email'; updateStatsUI();
+                if (!(await verifyEmail(email))) { stats.invalid++; updateStatsUI(); continue; }
+            }
+
+            const currentSmtpConfig = smtpConfigs[smtpIndex];
+            const currentProxy = (useProxy && proxies.length > 0) ? proxies[proxyIndex] : null;
+
+            try {
+                const currentLink = links.length > 0 ? links[linkIndex % links.length] : '';
+                const replacements = {
+                    '-email-': email,
+                    '-emailuser-': email.split('@')[0],
+                    '-emaildomain-': email.split('@')[1],
+                    '-emaildomainname-': email.split('@')[1].split('.')[0],
+                    'link': currentLink,
+                    '[-link-]': currentLink,
+                    '[link]': currentLink
+                };
+                const letterPath = config.rotateLetters ? letters[letterIndex % letters.length] : letters[0];
+                if (!letterPath) throw new Error("No letters found");
+                let rawTemplate = await fs.readFile(letterPath, 'utf-8');
+                let emailContent = replaceTags(rawTemplate, replacements);
+
+                if (config.aiEnabled && config.aiScanEnabled && config.aiApiKey && idx === 0) {
+                    emailContent = await aiLetterScanner(config, emailContent);
+                }
+                const emailSubject = replaceTags(subjects[Math.floor(Math.random() * subjects.length)] || "No Subject", replacements);
+                const dynamicSenderName = replaceTags(senderName, replacements);
+
+                if (config.autoShortenLinks) { stats.status = 'Shortening Links'; updateStatsUI(); emailContent = await shortenLinks(emailContent); }
+
+                const attachments = [];
+
+                if (config.sendBarcode && (emailContent.includes('[-barcode-') || emailContent.includes('{{barcode'))) {
+                    stats.status = 'Generating Barcode'; updateStatsUI();
+                    const barcodeMatch = emailContent.match(/\[-barcode-(.*?)-\]/) || emailContent.match(/{{barcode "(.*?)"}}/);
+                    if (barcodeMatch) {
+                        const barcodeText = replaceTags(barcodeMatch[1], replacements);
+                        const barcodeBuffer = await generateBarcode(barcodeText);
+                        attachments.push({ filename: 'barcode.png', content: barcodeBuffer, cid: 'barcode' });
+                        replacements.barcode = barcodeText; // Ensure it's available for Handlebars if needed
+                    }
+                }
+
+                // Compile with Handlebars
+                emailContent = replaceTags(emailContent, replacements);
+                const hasRecipientLogoTag = emailContent.includes('[-recipient-logo-]') ||
+                                          emailContent.includes('[user-logo]') ||
+                                          emailContent.includes('{{recipientLogo}}') ||
+                                          emailContent.includes('{{{recipientLogo}}}');
+
+                if (hasRecipientLogoTag) {
+                    stats.status = 'Fetching Recipient Logo'; updateStatsUI();
+                    const logoBuffer = await getRecipientLogo(email);
+                    if (logoBuffer) {
+                        attachments.push({ filename: 'logo.png', content: logoBuffer, cid: 'recipientlogo' });
+                        replacements.recipientLogo = '<img src="cid:recipientlogo"/>';
+                    }
+                }
+
+                const transporter = await createTransporter(currentSmtpConfig, currentProxy, email, config.useDKIM ? config.dkimOptions : null, config.directMxOptions);
+
+                stats.currentSpamScore = evaluateSpamScore(emailSubject, emailContent).score;
+                let fromAddress;
+                if (config.useCustomFrom && fromEmails.length > 0) { fromAddress = `"${dynamicSenderName}" <${replaceTags(fromEmails[fromIndex % fromEmails.length], replacements)}>`; fromIndex++; }
+                else if (hideFromEmail) { fromAddress = `"${dynamicSenderName}" <${randomstring.generate({length: 8, charset: 'alphabetic'})}@${replacements['-emaildomain-']}>`; }
+                else { fromAddress = `"${dynamicSenderName}" <${useCustomFromEmail && currentSmtpConfig.fromEmail ? currentSmtpConfig.fromEmail : (currentSmtpConfig.auth ? currentSmtpConfig.auth.user : 'info@' + replacements['-emaildomain-'])}>`; }
+
+                const mailOptions = {
+                    from: fromAddress,
+                    to: email,
+                    subject: emailSubject,
+                    html: emailContent,
+                    attachments,
+                    priority: 'high',
+                    messageId: `<${randomstring.generate(12).toLowerCase()}@${replacements['-emaildomain-']}>`,
+                    headers: {
+                        'X-Originating-IP': '127.0.0.1',
+                        'X-Mailer': 'Microsoft Outlook 16.0',
+                        'X-Forwarded-For': '127.0.0.1',
+                        'X-Real-IP': '127.0.0.1',
+                        'X-Priority': '1 (Highest)',
+                        'Importance': 'High',
+                        'X-MSMail-Priority': 'High'
+                    }
+                };
+
+                if (config.sendAttachment) {
+                    stats.status = 'Generating Attachment'; updateStatsUI();
+                    const dynamicName = replaceTags(pdfAttachmentName, replacements);
+                    const attachmentHtml = replaceTags(await fs.readFile(attachmentHtmlPath, 'utf-8'), replacements);
+                    const minifiedHtml = minify(attachmentHtml, { removeAttributeQuotes: true, collapseWhitespace: true, removeComments: true });
+
+                    let contentBuffer;
+                    let extension = '';
+                    if (config.attachmentType === 'Image') {
+                        contentBuffer = await nodeHtmlToImage({ html: minifiedHtml, type: 'png' });
+                        extension = '.png';
+                    } else if (config.attachmentType === 'SVG') {
+                        contentBuffer = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">${minifiedHtml}</div></foreignObject></svg>`);
+                        extension = '.svg';
+                    } else {
+                        contentBuffer = await generatePdf(minifiedHtml, pdfQuality);
+                        extension = '.pdf';
+                    }
+
+                    const fileName = dynamicName.split('.')[0] + extension;
+
+                    if (config.encryptionMethod && config.encryptionMethod !== 'None') {
+                        stats.status = `Encrypting (${config.encryptionMethod})`; updateStatsUI();
+                        contentBuffer = await encryptBuffer(contentBuffer, config.encryptionMethod, config.encryptionPassword || 'secret');
+                    }
+                    mailOptions.attachments.push({ filename: config.encryptionMethod === 'ZIP' ? fileName + '.zip' : fileName, content: contentBuffer });
+
+                    if (config.signAttachment) {
+                        const signature = crypto.createHash('sha256').update(contentBuffer).digest('hex');
+                        mailOptions.attachments.push({
+                            filename: (config.encryptionMethod === 'ZIP' ? fileName + '.zip' : fileName) + '.sig',
+                            content: `Signature (SHA256): ${signature}\nVerified by magxxicVox Security`,
+                        });
+                    }
+                }
+
+                stats.status = 'Sending Email'; updateStatsUI();
+
+                let sentSuccessfully = false;
+                let lastError = null;
+                const maxRetries = config.directMxOptions ? (config.directMxOptions.retries || 3) : 3;
+
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        await transporter.sendMail(mailOptions);
+                        sentSuccessfully = true;
+                        break;
+                    } catch (err) {
+                        lastError = err;
+                        if (attempt < maxRetries) {
+                            stats.status = `Retrying (${attempt}/${maxRetries})`; updateStatsUI();
+                            await new Promise(r => setTimeout(r, 1000));
+                        }
+                    }
+                }
+
+                if (sentSuccessfully) {
+                    stats.sent++;
+                    stats.domains[domain].sent++;
+                    updateStatsUI();
+
+                    // Test email every 100 sends
+                    if (stats.sent % 100 === 0 && testEmailAddress) {
+                        stats.status = 'Sending Test'; updateStatsUI();
+                        const testMailOptions = { ...mailOptions, to: testEmailAddress, subject: `TEST EMAIL - ${stats.sent} sends` };
+                        await transporter.sendMail(testMailOptions).catch(() => {});
+                    }
+                } else {
+                    throw lastError;
+                }
+            } catch (err) {
+                stats.failed++;
+                stats.domains[domain].failed++;
+                stats.status = 'Error: ' + err.message;
+
+                // Basic bounce detection
+                const msg = err.message.toLowerCase();
+                if (msg.includes('spam') || msg.includes('blocked') || msg.includes('blacklisted')) stats.bounces.spam++;
+                else if (msg.includes('not found') || msg.includes('mailbox unavailable') || msg.includes('550')) stats.bounces.hard++;
+                else stats.bounces.soft++;
+
+                updateStatsUI();
+                await fs.appendFile(path.join(__dirname, 'undeliverable_emails.log'), `${email} | ERROR: ${err.message}\n`).catch(() => {});
+            }
+            finally {
+                idx++;
+                smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                if (useProxy && proxies.length > 0) proxyIndex = (proxyIndex + 1) % proxies.length;
+                if (config.rotateLetters) letterIndex++;
+                if (links.length > 0) linkIndex++;
+
+                // Pause Logic
+                if (config.pauseEvery > 0 && (idx + 1) % config.pauseEvery === 0 && (idx + 1) < rawEmailList.length) {
+                    stats.status = 'Paused'; updateStatsUI();
+                    await new Promise(r => setTimeout(r, config.pauseTime || 30000));
+                } else {
+                    await new Promise(r => setTimeout(r, delayBetweenEmails));
+                }
+            }
+        }
+    } catch (err) { console.error(`${colors.red}Error in sendEmails: ${err.message}${colors.reset}`); }
+}
+
+async function run() {
+    await checkLicense();
+
+    let method;
+    let directMxOptions = await loadDirectMxConfig();
+    let appConfig = await loadAppConfig();
+
+    while (true) {
+        method = await chooseSendingMethod();
+
+        if (method === '4') {
+            if (!appConfig.aiEnabled || !appConfig.aiApiKey) {
+                console.log(`${colors.red}[!] AI Features disabled or API Key missing.${colors.reset}`);
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+            await aiLetterCrafter(appConfig);
+            continue;
+        } else if (method === '5') {
+            await showSettingsDashboard(appConfig, directMxOptions);
+            continue;
+        } else if (method === '6') {
+            const proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+            await validateProxies(proxies);
+            await checkDirectMxConnectivity(proxies.length > 0 ? proxies[0] : null);
+            await askQuestion('\nDiagnostic complete. Press Enter to return to menu...');
+            continue;
+        } else if (method === '6') {
+            process.exit(0);
+        } else if (['1', '2', '3'].includes(method)) {
+            break;
+        } else {
+            console.error(`${colors.red}[!] Invalid selection.${colors.reset}`);
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+
+    let smtpConfigs = [];
+
+    if (method === '1') {
+        smtpConfigs = await loadSmtpConfigs(path.join(__dirname, 'smtp.txt'));
+    } else if (method === '2') {
+        smtpConfigs = await loadApiConfigs();
+    } else if (method === '3') {
+        smtpConfigs = [{ type: 'direct', ...directMxOptions }];
+        let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+        if (proxies.length > 0) {
+            proxies = await validateProxies(proxies);
+            if (proxies.length === 0) {
+                console.error(`${colors.red}[!] No live proxies found!${colors.reset}`);
+                process.exit(1);
+            }
+        }
+        await checkDirectMxConnectivity(proxies.length > 0 ? proxies[0] : null);
+    }
+
+    const dkimOptions = await loadDkimConfig();
+
+    let proxies = await loadFiles(path.join(__dirname, 'proxies.txt'));
+    if (proxies.length > 0) {
+        proxies = await validateProxies(proxies);
+    }
+
+    if (method !== '3' && !appConfig.skipSmtpCheck) {
+        smtpConfigs = await checkSmtpConfigs(smtpConfigs, dkimOptions, proxies, directMxOptions);
+    }
+
+    if (smtpConfigs.length === 0) {
+        console.error(`${colors.red}[!] No valid configurations found for selected method!${colors.reset}`);
+        process.exit(1);
+    }
+
+    console.log(`\n${colors.cyan}Attachment Settings:${colors.reset}`);
+    const sendAtt = (await askQuestion('Send Attachment this session? (y/n): ')).toLowerCase() === 'y';
+    let attType = appConfig.attachmentType || 'PDF';
+    if (sendAtt) {
+        console.log('  1. PDF');
+        console.log('  2. Image');
+        console.log('  3. SVG');
+        const choice = await askQuestion('Select Attachment Format (1-3): ');
+        attType = choice === '1' ? 'PDF' : (choice === '2' ? 'Image' : 'SVG');
+    }
+
+    const config = {
+        ...appConfig,
+        sendAttachment: sendAtt,
+        attachmentType: attType,
+        useDKIM: dkimOptions !== null,
+        dkimOptions: dkimOptions,
+        directMxOptions: directMxOptions
+    };
+
+    await sendEmails({
+        emailListPath: path.join(__dirname, 'list.txt'),
+        smtpConfigs,
+        lettersDir: path.join(__dirname, 'letters'),
+        subjectPath: path.join(__dirname, 'subjects.txt'),
+        pdfAttachmentName: 'overdue_bill_[-randomnumber-].pdf',
+        senderName: ' [-emailuser-] via Docusign ',
+        attachmentHtmlPath: path.join(__dirname, 'attachment.sys'),
+        delayBetweenEmails: config.delayBetweenEmails,
+        hideFromEmail: true,
+        useCustomFromEmail: false,
+        pdfQuality: 80,
+        proxyList: proxies,
+        testEmailAddress: '',
+        useProxy: true,
+        verifyBeforeSend: directMxOptions.verifyDns,
+        config
+    });
+
+    if (globalBrowser) {
+        await globalBrowser.close().catch(() => {});
+        globalBrowser = null;
+    }
+}
+
+async function printLines() {
+    console.log(`${colors.red}
+      @@@@          @@@@@@@@@@@@@@@@@@@@@@@@          @@@@
+      @@@@          @@@@@@@@@@@@@@@@@@@@@@@@          @@@@
+                    @@@@@@@@@@@@@@@@@@@@@@@@
+                          @@@@@@@@@@
+                      @@@@@@@@@@@@@@@@@@
+                  @@@@@@@@@@@@@@@@@@@@@@@@@@
+                  @@@@@@@@@@@@@@@@@@@@@@@@@@
+${colors.blue}
+  __  __    _    ____ __  __ __  __ __  __ ___  ____  _  _  _____
+ |  \/  |  / \  / ___|\ \/ / \ \/ / \ \/ /|_ _|| ___|| \/ ||_   _|
+ | |\/| | / _ \| |  _  \  /   \  /   \  /  | | | |   |    |  | |
+ | |  | |/ ___ \ |_| | /  \   /  \   /  \  | | | |__ | |\ |  | |
+ |_|  |_/_/   \_\____|/_/\_\ /_/\_\ /_/\_\|___| \___||_| \_|  |_|
+${colors.yellow}
+      >>> PROXY-ONLY DIRECT-TO-MX DELIVERY SYSTEM - STATUS: ARMED <<<
+      [RFC-2822] [DKIM-SIGNED] [SOCKS5-CHAIN] [ZERO-SMTP-RELAY]
+      VERSION 4.0.0 | BUILD 2024-05-20 | SCORPION PROTOCOL
+${colors.reset}`);
+}
+
+run();

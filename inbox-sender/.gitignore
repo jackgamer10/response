@@ -1,0 +1,4 @@
+node_modules/
+package-lock.json
+license.key
+undeliverable_emails.log
