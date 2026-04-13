@@ -109,7 +109,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v3.2 - Ultra Speed & Robust Diagnostic Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.0 - Ultra Speed & Universal Relay Edition'));
 }
 
 async function analyzeSpam() {
@@ -252,7 +252,9 @@ async function loadSmtp(filePath) {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
             const parts = line.split('|');
-            return { host: parts[0], port: parseInt(parts[1]), auth: { user: parts[2], pass: parts[3] }, fromEmail: parts[4] || parts[2] };
+            const fromEmail = parts[4] || parts[2];
+            const ehlo = parts[5] || (fromEmail.includes('@') ? fromEmail.split('@')[1] : 'localhost');
+            return { host: parts[0], port: parseInt(parts[1]), auth: { user: parts[2], pass: parts[3] }, fromEmail: fromEmail, name: ehlo };
         });
     } catch (err) { console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`)); return []; }
 }
@@ -289,7 +291,7 @@ async function encryptData(data, password) {
 async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPath) {
     const proxyUrl = proxy ? (proxy.includes('://') ? proxy : `socks5://${proxy}`) : null;
     const transporter = nodemailer.createTransport({
-        host: smtp.host, port: smtp.port, auth: smtp.auth,
+        host: smtp.host, port: smtp.port, auth: smtp.auth, name: smtp.name,
         tls: { rejectUnauthorized: false },
         createConnection: (options, callback) => {
             if (proxyUrl) {

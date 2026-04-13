@@ -119,7 +119,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v3.2[/bold cyan]\n[blue]Ultra Speed & Robust Diagnostic Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.0[/bold cyan]\n[blue]Ultra Speed & Universal Relay Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -331,7 +331,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path):
         return socket.create_connection((smtp["host"], smtp["port"]), timeout=30)
 
     conn = get_conn()
-    server = smtplib.SMTP(timeout=30, local_hostname='localhost')
+    server = smtplib.SMTP(timeout=30, local_hostname=smtp['ehlo'])
     server.sock = conn
     server.file = conn.makefile('rb')
     server.helo_or_helo_if_needed()
@@ -349,7 +349,10 @@ def send_emails():
         smtps = []
         for line in open(CONFIG["smtp_path"]).readlines():
             parts = line.strip().split("|")
-            if len(parts) >= 4: smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": parts[4] if len(parts) > 4 else parts[2]})
+            if len(parts) >= 4:
+                from_email = parts[4] if len(parts) > 4 else parts[2]
+                ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
+                smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
         letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
         proxies = [l.strip() for l in open(CONFIG["proxies_path"]).readlines() if l.strip()]
 
@@ -425,7 +428,10 @@ def run():
             smtps = []
             for line in open(CONFIG["smtp_path"]).readlines():
                 parts = line.strip().split("|")
-                if len(parts) >= 4: smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": parts[4] if len(parts) > 4 else parts[2]})
+                if len(parts) >= 4:
+                    from_email = parts[4] if len(parts) > 4 else parts[2]
+                    ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
+                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
             if not smtps: raise Exception("smtp.txt is empty.")
             console.print(f"\n[yellow]Testing {len(smtps)} SMTPs...[/yellow]")
             for i, smtp in enumerate(smtps):
@@ -447,7 +453,10 @@ def run():
             smtps = []
             for line in open(CONFIG["smtp_path"]).readlines():
                 parts = line.strip().split("|")
-                if len(parts) >= 4: smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": parts[4] if len(parts) > 4 else parts[2]})
+                if len(parts) >= 4:
+                    from_email = parts[4] if len(parts) > 4 else parts[2]
+                    ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
+                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
             letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
