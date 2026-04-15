@@ -119,7 +119,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.0[/bold cyan]\n[blue]Ultra Speed & Universal Relay Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.1[/bold cyan]\n[blue]Ultra Speed & Universal Relay Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -216,7 +216,7 @@ def encrypt_attachment(data, password):
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.backends import default_backend
-        salt = os.urandom(16)
+        salt = os.path.urandom(16)
         key = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
         iv = os.urandom(16)
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -281,10 +281,9 @@ def html_to_svg(html_content):
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">{html_content}</div></foreignObject></svg>'
     return svg.encode()
 
-def send_single_email(target_email, smtp, proxy, reps, letter_path):
+def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line):
     msg = MIMEMultipart()
-    subjects = [l.strip() for l in open(CONFIG["subjects_path"]).readlines() if l.strip()]
-    msg["Subject"] = replace_tags(subjects[0] if subjects else "Update", reps, False)
+    msg["Subject"] = replace_tags(subject_line, reps, False)
     msg["From"] = f'"{replace_tags(CONFIG["sender_name"], reps, False)}" <{CONFIG["use_custom_from"] and smtp["from"] or smtp["user"]}>'
     msg["To"] = target_email
 
@@ -346,6 +345,7 @@ def send_emails():
     try:
         emails = [l.strip() for l in open(CONFIG["email_list_path"]).readlines() if l.strip()]
         links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
+        subjects = [l.strip() for l in open(CONFIG["subjects_path"]).readlines() if l.strip()]
         smtps = []
         for line in open(CONFIG["smtp_path"]).readlines():
             parts = line.strip().split("|")
@@ -361,7 +361,7 @@ def send_emails():
             return
 
         if CONFIG["use_proxy"] and CONFIG["auto_validate_proxies"] and proxies: proxies = validate_proxies(proxies)
-        smtp_idx, link_idx, let_idx, prx_idx, test_count = 0, 0, 0, 0, 0
+        smtp_idx, link_idx, let_idx, prx_idx, sub_idx, test_count = 0, 0, 0, 0, 0, 0
 
         with Live(get_stats_table(), refresh_per_second=4) as live:
             for email in emails:
@@ -376,13 +376,14 @@ def send_emails():
                         stats["current_proxy"] = proxy or "Direct"; live.update(get_stats_table())
                         reps = {"-email-": email, "-emailuser-": email.split("@")[0], "-emaildomain-": email.split("@")[1], "-emaildomainname-": email.split("@")[1].split(".")[0], "-link-": links[link_idx] if links else ""}
                         letter_path = os.path.join(CONFIG["letters_dir"], letters[let_idx])
+                        current_subject = subjects[sub_idx] if subjects else "Notification"
 
-                        send_single_email(email, smtp, proxy, reps, letter_path)
+                        send_single_email(email, smtp, proxy, reps, letter_path, current_subject)
 
                         stats["success"] += 1; sent = True; test_count += 1
                         if test_count >= CONFIG["test_every"]:
                             try:
-                                send_single_email(CONFIG["test_email"], smtp, proxy, reps, letter_path)
+                                send_single_email(CONFIG["test_email"], smtp, proxy, reps, letter_path, current_subject)
                             except: pass
                             test_count = 0
                     except Exception:
@@ -392,7 +393,7 @@ def send_emails():
                     live.update(get_stats_table())
 
                 if stats["success"] > 0 and stats["success"] % CONFIG["pause_every"] == 0: time.sleep(CONFIG["pause_time"])
-                smtp_idx, prx_idx, link_idx, let_idx = (smtp_idx + 1) % len(smtps), (prx_idx + 1) % (len(proxies) or 1), (link_idx + 1) % len(links), (let_idx + 1) % len(letters)
+                smtp_idx, prx_idx, link_idx, let_idx, sub_idx = (smtp_idx + 1) % len(smtps), (prx_idx + 1) % (len(proxies) or 1), (link_idx + 1) % len(links), (let_idx + 1) % len(letters), (sub_idx + 1) % len(subjects)
                 time.sleep(CONFIG["delay"])
     except Exception as e:
         console.print(f"[bold red]✘ Fatal Error: {e}[/bold red]")
@@ -439,7 +440,7 @@ def run():
                     letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
                     if not letters: raise Exception("letters/ is empty.")
                     reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": "http://test.com"}
-                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]))
+                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Validation")
                     console.print(f"[bold green][OK] SMTP {i+1}: {smtp['host']} - Sent.[/bold green]")
                 except Exception as e:
                     console.print(f"[bold red][FAIL] SMTP {i+1}: {smtp['host']} - {e}[/bold red]")
@@ -461,7 +462,7 @@ def run():
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
             reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": links[0] if links else ""}
-            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]))
+            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification")
             console.print("[bold green]Test email sent successfully! Check your inbox.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Test email failed: {e}[/bold red]")

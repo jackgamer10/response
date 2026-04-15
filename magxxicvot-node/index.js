@@ -109,7 +109,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.0 - Ultra Speed & Universal Relay Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.1 - Ultra Speed & Universal Relay Edition'));
 }
 
 async function analyzeSpam() {
@@ -288,7 +288,7 @@ async function encryptData(data, password) {
     return Buffer.concat([salt, iv, encrypted]);
 }
 
-async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPath) {
+async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPath, subjectLine) {
     const proxyUrl = proxy ? (proxy.includes('://') ? proxy : `socks5://${proxy}`) : null;
     const transporter = nodemailer.createTransport({
         host: smtp.host, port: smtp.port, auth: smtp.auth, name: smtp.name,
@@ -311,8 +311,7 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
 
     let html = await fs.readFile(letterPath, 'utf-8');
     html = await replaceTags(html, replacements, false);
-    const subjects = (await fs.readFile(CONFIG.subjectsPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
-    const subject = await replaceTags(subjects[0] || 'Notification', replacements, false);
+    const subject = await replaceTags(subjectLine || 'Notification', replacements, false);
     const sender = await replaceTags(CONFIG.senderName, replacements, false);
 
     const headers = {
@@ -348,6 +347,7 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
 async function sendEmails() {
     try {
         const emailList = (await fs.readFile(CONFIG.emailListPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        const subjects = (await fs.readFile(CONFIG.subjectsPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
         const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
         const smtpConfigs = await loadSmtp(CONFIG.smtpPath);
         let proxies = (await fs.readFile(CONFIG.proxiesPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
@@ -358,7 +358,7 @@ async function sendEmails() {
             throw new Error('Crucial mailing data is missing (list.txt, smtp.txt, or letters/).');
         }
 
-        let smtpIndex = 0, proxyIndex = 0, linkIndex = 0, letterIndex = 0, successSinceTest = 0;
+        let smtpIndex = 0, proxyIndex = 0, linkIndex = 0, letterIndex = 0, subjectIndex = 0, successSinceTest = 0;
 
         for (const email of emailList) {
             stats.sent++;
@@ -376,11 +376,12 @@ async function sendEmails() {
 
                     const replacements = { '-email-': email, '-emailuser-': email.split('@')[0], '-emaildomain-': email.split('@')[1], '-emaildomainname-': email.split('@')[1].split('.')[0], '-link-': links[linkIndex] || '' };
                     const letterPath = path.join(CONFIG.lettersDir, letterFiles[letterIndex]);
+                    const currentSubject = subjects[subjectIndex] || 'Notification';
 
-                    await sendSingleEmail(email, smtp, proxy, replacements, letterPath);
+                    await sendSingleEmail(email, smtp, proxy, replacements, letterPath, currentSubject);
                     stats.success++; sent = true; successSinceTest++;
                     if (successSinceTest >= CONFIG.testEmailEvery) {
-                        await sendSingleEmail(CONFIG.testEmailAddress, smtp, proxy, replacements, letterPath).catch(() => {});
+                        await sendSingleEmail(CONFIG.testEmailAddress, smtp, proxy, replacements, letterPath, currentSubject).catch(() => {});
                         successSinceTest = 0;
                     }
                 } catch (err) {
@@ -400,6 +401,7 @@ async function sendEmails() {
             if (proxies.length) proxyIndex = (proxyIndex + 1) % proxies.length;
             linkIndex = (linkIndex + 1) % links.length;
             letterIndex = (letterIndex + 1) % letterFiles.length;
+            subjectIndex = (subjectIndex + 1) % subjects.length;
             await new Promise(r => setTimeout(r, CONFIG.delayBetweenEmails));
         }
     } catch (err) { console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`)); } finally { if (browser) await browser.close(); }
@@ -444,7 +446,7 @@ async function run() {
                     const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': 'http://test.com' };
                     const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
                     if (!letterFiles.length) throw new Error('letters/ directory is empty.');
-                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]));
+                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification');
                     console.log(chalk.green(`[OK] SMTP ${i+1}: ${smtp.host} - Message Sent.`));
                 } catch (err) {
                     console.log(chalk.red(`[FAIL] SMTP ${i+1}: ${smtp.host} - Error: ${err.message}`));
@@ -464,7 +466,7 @@ async function run() {
             const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
             if (!smtps.length || !letterFiles.length) throw new Error('Missing SMTP or Letter for test.');
             const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': links[0] || '' };
-            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]));
+            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification');
             console.log(chalk.green('Final Test email sent successfully!'));
         } catch (err) {
             console.log(chalk.red('Test email failed: ' + err.message));
