@@ -119,7 +119,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.1[/bold cyan]\n[blue]Ultra Speed & Universal Relay Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.2[/bold cyan]\n[blue]Ultra Speed & Dynamic Tag Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -196,6 +196,7 @@ def replace_tags(text, replacements, is_attachment=False):
     new_text = re.sub(r'\[-randommd5-\]', lambda _: hashlib.md5(os.urandom(16)).hexdigest(), new_text)
     new_text = re.sub(r'\[-randomhex-\]', lambda _: os.urandom(8).hex(), new_text)
     new_text = re.sub(r'\[-time-\]', lambda _: datetime.now().strftime("%Y-%m-%d %H:%M:%S"), new_text)
+    new_text = re.sub(r'\[-date-\]', lambda _: datetime.now().strftime("%Y-%m-%d"), new_text)
 
     domain = replacements.get("-emaildomain-") or (replacements.get("-email-", "").split("@")[-1] if "@" in replacements.get("-email-", "") else "")
     logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
@@ -216,7 +217,7 @@ def encrypt_attachment(data, password):
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.backends import default_backend
-        salt = os.path.urandom(16)
+        salt = os.urandom(16)
         key = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
         iv = os.urandom(16)
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -440,7 +441,7 @@ def run():
                     letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
                     if not letters: raise Exception("letters/ is empty.")
                     reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": "http://test.com"}
-                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Validation")
+                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Verification [-randomnumber-] [-date-]")
                     console.print(f"[bold green][OK] SMTP {i+1}: {smtp['host']} - Sent.[/bold green]")
                 except Exception as e:
                     console.print(f"[bold red][FAIL] SMTP {i+1}: {smtp['host']} - {e}[/bold red]")
@@ -462,7 +463,7 @@ def run():
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
             reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": links[0] if links else ""}
-            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification")
+            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification [-randomnumber-] [-date-]")
             console.print("[bold green]Test email sent successfully! Check your inbox.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Test email failed: {e}[/bold red]")

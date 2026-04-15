@@ -109,7 +109,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.1 - Ultra Speed & Universal Relay Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.2 - Ultra Speed & Dynamic Tag Edition'));
 }
 
 async function analyzeSpam() {
@@ -228,6 +228,7 @@ async function replaceTags(text, replacements, isAttachment = false) {
     content = content.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
     content = content.replace(/\[-randomhex-\]/g, () => crypto.randomBytes(8).toString('hex'));
     content = content.replace(/\[-time-\]/g, () => new Date().toLocaleString());
+    content = content.replace(/\[-date-\]/g, () => new Date().toLocaleDateString());
 
     const domain = replacements['-emaildomain-'] || (replacements['-email-'] ? replacements['-email-'].split('@')[1] : '');
     const logoUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
@@ -446,7 +447,7 @@ async function run() {
                     const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': 'http://test.com' };
                     const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
                     if (!letterFiles.length) throw new Error('letters/ directory is empty.');
-                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification');
+                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification [-randomnumber-] [-date-]');
                     console.log(chalk.green(`[OK] SMTP ${i+1}: ${smtp.host} - Message Sent.`));
                 } catch (err) {
                     console.log(chalk.red(`[FAIL] SMTP ${i+1}: ${smtp.host} - Error: ${err.message}`));
@@ -466,7 +467,7 @@ async function run() {
             const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
             if (!smtps.length || !letterFiles.length) throw new Error('Missing SMTP or Letter for test.');
             const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': links[0] || '' };
-            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification');
+            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification [-randomnumber-] [-date-]');
             console.log(chalk.green('Final Test email sent successfully!'));
         } catch (err) {
             console.log(chalk.red('Test email failed: ' + err.message));
