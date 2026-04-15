@@ -119,7 +119,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.2[/bold cyan]\n[blue]Ultra Speed & Dynamic Tag Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.3[/bold cyan]\n[blue]Ultra Speed & Dynamic Tag Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -179,28 +179,45 @@ def generate_barcode(data):
 
 def replace_tags(text, replacements, is_attachment=False):
     new_text = text
-    new_text = new_text.replace("[-email-]", replacements.get("-email-", ""))
-    new_text = new_text.replace("[-emailuser-]", replacements.get("-emailuser-", ""))
-    new_text = new_text.replace("[-emaildomain-]", replacements.get("-emaildomain-", ""))
-    new_text = new_text.replace("[-emaildomainname-]", replacements.get("-emaildomainname-", ""))
+    email = replacements.get("-email-", "")
+    user = replacements.get("-emailuser-") or (email.split("@")[0] if "@" in email else "")
+    domain = replacements.get("-emaildomain-") or (email.split("@")[1] if "@" in email else "")
+    domainname = replacements.get("-emaildomainname-") or (domain.split(".")[0] if "." in domain else domain)
 
+    tag_map = {
+        r'\[-email-\]': email, r'\[email\]': email,
+        r'\[-emailuser-\]': user, r'\[user\]': user,
+        r'\[-emaildomain-\]': domain, r'\[domain\]': domain,
+        r'\[-emaildomainname-\]': domainname, r'\[domainname\]': domainname,
+        r'\[-time-\]': datetime.now().strftime("%H:%M:%S"), r'\[time\]': datetime.now().strftime("%H:%M:%S"),
+        r'\[-date-\]': datetime.now().strftime("%Y-%m-%d"), r'\[date\]': datetime.now().strftime("%Y-%m-%d"),
+        r'\[-randomnumber-\]': lambda: str(random.randint(1000, 9999)),
+        r'\[randomnumber\]': lambda: str(random.randint(1000, 9999)),
+        r'\[-randomstring-\]': lambda: ''.join(random.choices(string.ascii_letters + string.digits, k=10)),
+        r'\[randomstring\]': lambda: ''.join(random.choices(string.ascii_letters + string.digits, k=10)),
+        r'\[-randomhex-\]': lambda: os.urandom(4).hex(),
+        r'\[randomhex\]': lambda: os.urandom(4).hex(),
+        r'\[-randommd5-\]': lambda: hashlib.md5(os.urandom(8)).hexdigest(),
+        r'\[-randomletters-\]': lambda: ''.join(random.choices(string.ascii_letters, k=8))
+    }
+
+    for tag, val in tag_map.items():
+        if callable(val):
+            new_text = re.sub(tag, lambda _: val(), new_text)
+        else:
+            new_text = re.sub(tag, val, new_text)
+
+    # Unique URL generation
     final_link = replacements.get("-link-", "")
     if CONFIG["unique_url"] and CONFIG["base_url"]:
         sep = "&" if "?" in CONFIG["base_url"] else "?"
         final_link = f"{CONFIG['base_url']}{sep}v={''.join(random.choices(string.ascii_letters + string.digits, k=12))}"
-    new_text = new_text.replace("[-link-]", final_link)
+    new_text = new_text.replace("[-link-]", final_link).replace("[link]", final_link)
 
-    new_text = re.sub(r'\[-randomstring-\]', lambda _: ''.join(random.choices(string.ascii_letters + string.digits, k=10)), new_text)
-    new_text = re.sub(r'\[-randomnumber-\]', lambda _: str(random.randint(1000, 9999)), new_text)
-    new_text = re.sub(r'\[-randomletters-\]', lambda _: ''.join(random.choices(string.ascii_letters, k=10)), new_text)
-    new_text = re.sub(r'\[-randommd5-\]', lambda _: hashlib.md5(os.urandom(16)).hexdigest(), new_text)
-    new_text = re.sub(r'\[-randomhex-\]', lambda _: os.urandom(8).hex(), new_text)
-    new_text = re.sub(r'\[-time-\]', lambda _: datetime.now().strftime("%Y-%m-%d %H:%M:%S"), new_text)
-    new_text = re.sub(r'\[-date-\]', lambda _: datetime.now().strftime("%Y-%m-%d"), new_text)
-
-    domain = replacements.get("-emaildomain-") or (replacements.get("-email-", "").split("@")[-1] if "@" in replacements.get("-email-", "") else "")
+    # Dynamic Logo
     logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
     new_text = new_text.replace("[-recipient-logo-]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
+    new_text = new_text.replace("[recipient-logo]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
 
     def barcode_replace(match):
         should_replace = CONFIG["send_barcode_in_attachment"] if is_attachment else CONFIG["send_barcode_in_letter"]
@@ -375,7 +392,7 @@ def send_emails():
                     try:
                         smtp, proxy = smtps[smtp_idx], proxies[prx_idx] if CONFIG["use_proxy"] and proxies else None
                         stats["current_proxy"] = proxy or "Direct"; live.update(get_stats_table())
-                        reps = {"-email-": email, "-emailuser-": email.split("@")[0], "-emaildomain-": email.split("@")[1], "-emaildomainname-": email.split("@")[1].split(".")[0], "-link-": links[link_idx] if links else ""}
+                        reps = {"-email-": email}
                         letter_path = os.path.join(CONFIG["letters_dir"], letters[let_idx])
                         current_subject = subjects[sub_idx] if subjects else "Notification"
 
@@ -440,8 +457,8 @@ def run():
                 try:
                     letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
                     if not letters: raise Exception("letters/ is empty.")
-                    reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": "http://test.com"}
-                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Verification [-randomnumber-] [-date-]")
+                    reps = {"-email-": CONFIG["test_email"]}
+                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Verification [randomnumber] [date]")
                     console.print(f"[bold green][OK] SMTP {i+1}: {smtp['host']} - Sent.[/bold green]")
                 except Exception as e:
                     console.print(f"[bold red][FAIL] SMTP {i+1}: {smtp['host']} - {e}[/bold red]")
@@ -462,8 +479,8 @@ def run():
             letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
-            reps = {"-email-": CONFIG["test_email"], "-emailuser-": CONFIG["test_email"].split("@")[0], "-emaildomain-": CONFIG["test_email"].split("@")[1], "-emaildomainname-": CONFIG["test_email"].split("@")[1].split(".")[0], "-link-": links[0] if links else ""}
-            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification [-randomnumber-] [-date-]")
+            reps = {"-email-": CONFIG["test_email"]}
+            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification [randomnumber] [date]")
             console.print("[bold green]Test email sent successfully! Check your inbox.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Test email failed: {e}[/bold red]")

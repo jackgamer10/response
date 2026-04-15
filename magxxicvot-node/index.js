@@ -109,7 +109,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.2 - Ultra Speed & Dynamic Tag Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.3 - Ultra Speed & Universal Relay Edition'));
 }
 
 async function analyzeSpam() {
@@ -210,30 +210,49 @@ async function generateBarcode(data) {
 
 async function replaceTags(text, replacements, isAttachment = false) {
     let content = text;
-    content = content.replace(/\[-email-\]/g, replacements['-email-'] || '');
-    content = content.replace(/\[-emailuser-\]/g, replacements['-emailuser-'] || '');
-    content = content.replace(/\[-emaildomain-\]/g, replacements['-emaildomain-'] || '');
-    content = content.replace(/\[-emaildomainname-\]/g, replacements['-emaildomainname-'] || '');
 
+    // Core Email Tags
+    const email = replacements['-email-'] || '';
+    const user = replacements['-emailuser-'] || (email.includes('@') ? email.split('@')[0] : '');
+    const domain = replacements['-emaildomain-'] || (email.includes('@') ? email.split('@')[1] : '');
+    const domainname = replacements['-emaildomainname-'] || (domain.includes('.') ? domain.split('.')[0] : domain);
+
+    const tagMap = {
+        '[-email-]': email, '[email]': email,
+        '[-emailuser-]': user, '[user]': user,
+        '[-emaildomain-]': domain, '[domain]': domain,
+        '[-emaildomainname-]': domainname, '[domainname]': domainname,
+        '[-time-]': new Date().toLocaleTimeString(), '[time]': new Date().toLocaleTimeString(),
+        '[-date-]': new Date().toLocaleDateString(), '[date]': new Date().toLocaleDateString(),
+        '[-randomnumber-]': () => Math.floor(1000 + Math.random() * 9000).toString(),
+        '[randomnumber]': () => Math.floor(1000 + Math.random() * 9000).toString(),
+        '[-randomstring-]': () => randomstring.generate(10),
+        '[randomstring]': () => randomstring.generate(10),
+        '[-randomhex-]': () => crypto.randomBytes(4).toString('hex'),
+        '[randomhex]': () => crypto.randomBytes(4).toString('hex'),
+        '[-randommd5-]': () => crypto.createHash('md5').update(randomstring.generate(8)).digest('hex'),
+        '[-randomletters-]': () => randomstring.generate({ length: 8, charset: 'alphabetic' })
+    };
+
+    for (const [tag, value] of Object.entries(tagMap)) {
+        const regex = new RegExp(tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        content = content.replace(regex, typeof value === 'function' ? value : value);
+    }
+
+    // Unique URL generation
     let finalLink = replacements['-link-'] || '';
     if (CONFIG.uniqueUrl && CONFIG.baseUrl) {
         const sep = CONFIG.baseUrl.includes('?') ? '&' : '?';
         finalLink = `${CONFIG.baseUrl}${sep}v=${randomstring.generate(12)}`;
     }
-    content = content.replace(/\[-link-\]/g, finalLink);
+    content = content.replace(/\[-link-\]/g, finalLink).replace(/\[link\]/g, finalLink);
 
-    content = content.replace(/\[-randomstring-\]/g, () => randomstring.generate());
-    content = content.replace(/\[-randomnumber-\]/g, () => Math.floor(1000 + Math.random() * 9000).toString());
-    content = content.replace(/\[-randomletters-\]/g, () => randomstring.generate({ charset: 'alphabetic' }));
-    content = content.replace(/\[-randommd5-\]/g, () => crypto.createHash('md5').update(randomstring.generate()).digest('hex'));
-    content = content.replace(/\[-randomhex-\]/g, () => crypto.randomBytes(8).toString('hex'));
-    content = content.replace(/\[-time-\]/g, () => new Date().toLocaleString());
-    content = content.replace(/\[-date-\]/g, () => new Date().toLocaleDateString());
-
-    const domain = replacements['-emaildomain-'] || (replacements['-email-'] ? replacements['-email-'].split('@')[1] : '');
+    // Dynamic Logo
     const logoUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
-    content = content.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
+    content = content.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`)
+                     .replace(/\[recipient-logo\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
 
+    // Barcode replacement
     const barcodeRegex = /\[-barcode-(.*?)-\]/g;
     const matches = [...content.matchAll(barcodeRegex)];
     for (const match of matches) {
@@ -444,7 +463,7 @@ async function run() {
             for (let i = 0; i < smtps.length; i++) {
                 const smtp = smtps[i];
                 try {
-                    const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': 'http://test.com' };
+                    const reps = { '-email-': CONFIG.testEmailAddress };
                     const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
                     if (!letterFiles.length) throw new Error('letters/ directory is empty.');
                     await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification [-randomnumber-] [-date-]');
@@ -466,7 +485,7 @@ async function run() {
             const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
             const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
             if (!smtps.length || !letterFiles.length) throw new Error('Missing SMTP or Letter for test.');
-            const reps = { '-email-': CONFIG.testEmailAddress, '-emailuser-': CONFIG.testEmailAddress.split('@')[0], '-emaildomain-': CONFIG.testEmailAddress.split('@')[1], '-emaildomainname-': CONFIG.testEmailAddress.split('@')[1].split('.')[0], '-link-': links[0] || '' };
+            const reps = { '-email-': CONFIG.testEmailAddress, '-link-': links[0] || '' };
             await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification [-randomnumber-] [-date-]');
             console.log(chalk.green('Final Test email sent successfully!'));
         } catch (err) {
