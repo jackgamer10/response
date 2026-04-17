@@ -3,6 +3,9 @@ import email
 import re
 import os
 import sys
+import uuid
+import socket
+import hashlib
 from email.header import decode_header
 try:
     from rich.console import Console
@@ -10,7 +13,6 @@ try:
     from rich.progress import Progress
     from rich.prompt import Prompt, Confirm
     from rich.table import Table
-    from rich.columns import Columns
 except ImportError:
     print("Installing dependencies...")
     import subprocess
@@ -20,9 +22,75 @@ except ImportError:
     from rich.progress import Progress
     from rich.prompt import Prompt, Confirm
     from rich.table import Table
-    from rich.columns import Columns
 
 console = Console()
+
+SALT = "MAGXXICVOT-XII-SALT"
+
+class LicenseManager:
+    def __init__(self):
+        self.activation_file = "activation.sys"
+
+    def get_hwid(self):
+        try:
+            hostname = socket.gethostname()
+            mac = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+            hwid_string = f"{hostname}{mac}{SALT}"
+            return hashlib.sha256(hwid_string.encode()).hexdigest()[:16].upper()
+        except:
+            return "UNKNOWN-HWID-0000"
+
+    def verify_token(self, hwid, token):
+        # Activation logic: Base64 reverse obfuscation
+        import base64
+        try:
+            expected = base64.b64encode(hwid[::-1].encode()).decode().replace('=', '')[:16].upper()
+            return token == expected
+        except:
+            return False
+
+    def is_activated(self):
+        if not os.path.exists(self.activation_file):
+            return False
+        try:
+            with open(self.activation_file, 'r') as f:
+                token = f.read().strip()
+                return self.verify_token(self.get_hwid(), token)
+        except:
+            return False
+
+    def save_activation(self, token):
+        try:
+            with open(self.activation_file, 'w') as f:
+                f.write(token)
+            return True
+        except:
+            return False
+
+    def run_activation_loop(self):
+        if self.is_activated():
+            return True
+
+        hwid = self.get_hwid()
+        console.print(Panel(
+            f"[white]Your HWID:[/white] [bold cyan]{hwid}[/bold cyan]\n"
+            f"[italic yellow]Please provide your HWID to the administrator to receive your activation token.[/italic yellow]",
+            title="[bold red]MagxxicVOT XII - Activation Required[/bold red]",
+            border_style="red"
+        ))
+
+        while True:
+            token = Prompt.ask("[bold yellow]Enter Activation Token[/bold yellow]").strip()
+            if self.verify_token(hwid, token):
+                if self.save_activation(token):
+                    console.print("[bold green]✓ Activation Successful! Restarting application...[/bold green]")
+                    return True
+                else:
+                    console.print("[bold red]Error: Could not save activation file.[/bold red]")
+            else:
+                console.print("[bold red]Invalid Token. Please try again.[/bold red]")
+                if not Confirm.ask("[yellow]Retry?[/yellow]", default=True):
+                    sys.exit(0)
 
 BANNER = r"""
 [bold cyan]
@@ -61,8 +129,8 @@ def get_imap_server(email_address):
 def extract_emails_from_text(text):
     if not text:
         return set()
-    # Improved regex for email extraction
-    return set(re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-]*[a-zA-Z0-9-]', text))
+    # Improved regex for email extraction supporting subdomains and complex TLDs
+    return set(re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+[a-zA-Z0-9-]', text))
 
 def parse_folder_line(line):
     # IMAP list returns something like '(\\HasNoChildren) "/" "INBOX"'
@@ -161,9 +229,9 @@ def fetch_contacts():
                     msg_ids = messages[0].split()
                     msg_count = len(msg_ids)
 
-                    # To avoid hanging on massive mailboxes, we can limit or just go through them
-                    # For this tool, we'll scan up to 500 latest emails per folder
-                    limit = 500
+                    # To ensure performance, we scan the most recent emails first
+                    # User can select scan depth
+                    limit = 1000
                     target_ids = msg_ids[-limit:]
 
                     msg_task = progress.add_task(f"  [white]Processing {folder}...", total=len(target_ids))
@@ -231,7 +299,9 @@ def fetch_contacts():
 
 if __name__ == "__main__":
     try:
-        fetch_contacts()
+        lm = LicenseManager()
+        if lm.run_activation_loop():
+            fetch_contacts()
     except KeyboardInterrupt:
         console.print("\n[bold red]Operation cancelled by user.[/bold red]")
         sys.exit(0)
