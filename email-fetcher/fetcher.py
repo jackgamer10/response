@@ -9,6 +9,8 @@ try:
     from rich.panel import Panel
     from rich.progress import Progress
     from rich.prompt import Prompt, Confirm
+    from rich.table import Table
+    from rich.columns import Columns
 except ImportError:
     print("Installing dependencies...")
     import subprocess
@@ -17,6 +19,8 @@ except ImportError:
     from rich.panel import Panel
     from rich.progress import Progress
     from rich.prompt import Prompt, Confirm
+    from rich.table import Table
+    from rich.columns import Columns
 
 console = Console()
 
@@ -60,15 +64,20 @@ def extract_emails_from_text(text):
     # Improved regex for email extraction
     return set(re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-]*[a-zA-Z0-9-]', text))
 
-def clean_folder_name(folder_data):
+def parse_folder_line(line):
     # IMAP list returns something like '(\\HasNoChildren) "/" "INBOX"'
+    # or '() "/" INBOX'
+    pattern = re.compile(r'\((?P<flags>.*?)\)\s+"(?P<delimiter>.*?)"\s+"?(?P<name>.*?)"?$')
+    match = pattern.match(line.decode())
+    if match:
+        return match.group('name')
+
+    # Fallback for simpler formats
     try:
-        parts = folder_data.decode().split(' "/" ')
-        if len(parts) > 1:
-            return parts[-1].strip().strip('"')
-        return folder_data.decode().split()[-1].strip().strip('"')
+        parts = line.decode().split(' ')
+        return parts[-1].strip().strip('"')
     except:
-        return str(folder_data)
+        return line.decode()
 
 def fetch_contacts():
     console.print(BANNER)
@@ -101,17 +110,38 @@ def fetch_contacts():
             console.print("[red]Error: Could not retrieve folder list.[/red]")
             return
 
-        all_folders = [clean_folder_name(f) for f in folder_list]
+        all_folders = sorted(list(set([parse_folder_line(f) for f in folder_list])))
 
-        # Priority folders to scan
-        priority_folders = ['INBOX', 'Sent', 'Sent Items', 'Sent Messages', 'Drafts', 'Junk', 'Spam']
-        folders_to_scan = [f for f in all_folders if f in priority_folders or any(p.lower() in f.lower() for p in priority_folders)]
+        console.print("[bold cyan]Available Folders:[/bold cyan]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("ID", style="dim", width=6)
+        table.add_column("Folder Name")
 
-        # If no common folders found, just use INBOX or all
+        for i, folder in enumerate(all_folders):
+            table.add_row(str(i+1), folder)
+
+        console.print(table)
+
+        selection = Prompt.ask(
+            "\n[bold yellow]Select folders to scan[/bold yellow] (IDs separated by comma, e.g., 1,2,5 or 'all')",
+            default="all"
+        )
+
+        if selection.lower() == 'all':
+            folders_to_scan = all_folders
+        else:
+            try:
+                indices = [int(i.strip()) - 1 for i in selection.split(',')]
+                folders_to_scan = [all_folders[i] for i in indices if 0 <= i < len(all_folders)]
+            except:
+                console.print("[red]Invalid selection. Scanning all folders as default.[/red]")
+                folders_to_scan = all_folders
+
         if not folders_to_scan:
-            folders_to_scan = ['INBOX'] if 'INBOX' in all_folders else all_folders[:5]
+            console.print("[red]No folders selected. Exiting.[/red]")
+            return
 
-        console.print(f"[blue]Targeting Folders:[/blue] [cyan]{', '.join(folders_to_scan)}[/cyan]\n")
+        console.print(f"\n[blue]Selected Folders:[/blue] [cyan]{', '.join(folders_to_scan)}[/cyan]\n")
 
         with Progress() as progress:
             folder_task = progress.add_task("[cyan]Scanning folders...", total=len(folders_to_scan))
