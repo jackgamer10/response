@@ -53,7 +53,8 @@ const CONFIG = {
     uniqueUrl: true,
     baseUrl: '',
     sendBarcodeInLetter: true,
-    sendBarcodeInAttachment: true
+    sendBarcodeInAttachment: true,
+    stealthFromName: true
 };
 
 function askQuestion(query) {
@@ -82,6 +83,26 @@ function getHWID() {
 function obfuscate(str) { return Buffer.from(str).toString('base64').split('').reverse().join(''); }
 function deobfuscate(str) { return Buffer.from(str.split('').reverse().join(''), 'base64').toString('utf-8'); }
 
+function decodeSmart(str) {
+    if (!str) return '';
+    if (str.startsWith('base64:')) return Buffer.from(str.substring(7), 'base64').toString('utf-8');
+    if (str.startsWith('hex:')) return Buffer.from(str.substring(4), 'hex').toString('utf-8');
+    return str;
+}
+
+function injectStealth(text) {
+    if (!text) return '';
+    const invisibleChars = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+        result += text[i];
+        if (Math.random() > 0.7) {
+            result += invisibleChars[Math.floor(Math.random() * invisibleChars.length)];
+        }
+    }
+    return result;
+}
+
 async function checkLicense() {
     const hwid = getHWID(), activationFile = 'activation.sys';
     const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-XII-SALT').digest('hex').substring(0, 16).toUpperCase();
@@ -109,7 +130,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.3 - Ultra Speed & Universal Relay Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.4 - Ultra Speed & Stealth Header Edition'));
 }
 
 async function analyzeSpam() {
@@ -272,9 +293,11 @@ async function loadSmtp(filePath) {
         const content = await fs.readFile(filePath, 'utf-8');
         return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
             const parts = line.split('|');
-            const fromEmail = parts[4] || parts[2];
+            const user = decodeSmart(parts[2]);
+            const pass = decodeSmart(parts[3]);
+            const fromEmail = decodeSmart(parts[4] || parts[2]);
             const ehlo = parts[5] || (fromEmail.includes('@') ? fromEmail.split('@')[1] : 'localhost');
-            return { host: parts[0], port: parseInt(parts[1]), auth: { user: parts[2], pass: parts[3] }, fromEmail: fromEmail, name: ehlo };
+            return { host: parts[0], port: parseInt(parts[1]), auth: { user, pass }, fromEmail: fromEmail, name: ehlo };
         });
     } catch (err) { console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`)); return []; }
 }
@@ -332,7 +355,11 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
     let html = await fs.readFile(letterPath, 'utf-8');
     html = await replaceTags(html, replacements, false);
     const subject = await replaceTags(subjectLine || 'Notification', replacements, false);
-    const sender = await replaceTags(CONFIG.senderName, replacements, false);
+    let sender = await replaceTags(CONFIG.senderName, replacements, false);
+
+    if (CONFIG.stealthFromName) {
+        sender = injectStealth(sender);
+    }
 
     const headers = {
         'X-Mailer': 'Microsoft Outlook 16.0', 'X-Priority': '1 (Highest)', 'Importance': 'High', 'X-MSMail-Priority': 'High',
@@ -434,6 +461,7 @@ async function run() {
     CONFIG.useCustomFromEmail = (await askQuestion('Use Custom From Email? (y/n): ')).toLowerCase() === 'y';
     CONFIG.useProxy = (await askQuestion('Use SOCKS Proxy? (y/n): ')).toLowerCase() === 'y';
     CONFIG.hideMyIp = (await askQuestion('Enable Hide My IP (Header Masking)? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.stealthFromName = (await askQuestion('Enable Stealth From Name (Invisible Chars)? (y/n): ')).toLowerCase() === 'y';
 
     CONFIG.uniqueUrl = (await askQuestion('Enable Unique URL per Recipient? (y/n): ')).toLowerCase() === 'y';
     if (CONFIG.uniqueUrl) {

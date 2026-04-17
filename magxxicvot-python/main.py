@@ -63,7 +63,8 @@ CONFIG = {
     "unique_url": True,
     "base_url": "",
     "send_barcode_in_letter": True,
-    "send_barcode_in_attachment": True
+    "send_barcode_in_attachment": True,
+    "stealth_from_name": True
 }
 
 stats = {"sent": 0, "success": 0, "failed": 0, "current_proxy": "None"}
@@ -89,6 +90,22 @@ def deobfuscate(s):
     except: return ""
 
 def obfuscate(s): return base64.b64encode(s.encode()).decode()[::-1]
+
+def decode_smart(s):
+    if not s: return ""
+    if s.startswith("base64:"): return base64.b64decode(s[7:]).decode("utf-8")
+    if s.startswith("hex:"): return bytes.fromhex(s[4:]).decode("utf-8")
+    return s
+
+def inject_stealth(text):
+    if not text: return ""
+    inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
+    res = ""
+    for char in text:
+        res += char
+        if random.random() > 0.7:
+            res += random.choice(inv_chars)
+    return res
 
 def check_activation():
     hwid, activation_file = get_hwid(), "activation.sys"
@@ -119,7 +136,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.3[/bold cyan]\n[blue]Ultra Speed & Dynamic Tag Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.4[/bold cyan]\n[blue]Ultra Speed & Stealth Header Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -302,7 +319,12 @@ def html_to_svg(html_content):
 def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line):
     msg = MIMEMultipart()
     msg["Subject"] = replace_tags(subject_line, reps, False)
-    msg["From"] = f'"{replace_tags(CONFIG["sender_name"], reps, False)}" <{CONFIG["use_custom_from"] and smtp["from"] or smtp["user"]}>'
+
+    sender_name = replace_tags(CONFIG["sender_name"], reps, False)
+    if CONFIG["stealth_from_name"]:
+        sender_name = inject_stealth(sender_name)
+
+    msg["From"] = f'"{sender_name}" <{CONFIG["use_custom_from"] and smtp["from"] or smtp["user"]}>'
     msg["To"] = target_email
 
     msg["X-Mailer"] = "Microsoft Outlook 16.0"
@@ -368,9 +390,11 @@ def send_emails():
         for line in open(CONFIG["smtp_path"]).readlines():
             parts = line.strip().split("|")
             if len(parts) >= 4:
-                from_email = parts[4] if len(parts) > 4 else parts[2]
+                from_email = decode_smart(parts[4] if len(parts) > 4 else parts[2])
+                user = decode_smart(parts[2])
+                passw = decode_smart(parts[3])
                 ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
-                smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
+                smtps.append({"host": parts[0], "port": int(parts[1]), "user": user, "pass": passw, "from": from_email, "ehlo": ehlo})
         letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
         proxies = [l.strip() for l in open(CONFIG["proxies_path"]).readlines() if l.strip()]
 
@@ -423,6 +447,7 @@ def run():
     CONFIG["use_custom_from"] = console.input("[bold blue]Use Custom From Email? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["hide_my_ip"] = console.input("[bold blue]Enable Hide My IP (Header Masking)? (y/n): [/bold blue]").lower() == 'y'
+    CONFIG["stealth_from_name"] = console.input("[bold blue]Enable Stealth From Name (Invisible Chars)? (y/n): [/bold blue]").lower() == 'y'
 
     CONFIG["unique_url"] = console.input("[bold blue]Enable Unique URL per Recipient? (y/n): [/bold blue]").lower() == 'y'
     if CONFIG["unique_url"]:
@@ -448,9 +473,11 @@ def run():
             for line in open(CONFIG["smtp_path"]).readlines():
                 parts = line.strip().split("|")
                 if len(parts) >= 4:
-                    from_email = parts[4] if len(parts) > 4 else parts[2]
+                    from_email = decode_smart(parts[4] if len(parts) > 4 else parts[2])
+                    user = decode_smart(parts[2])
+                    passw = decode_smart(parts[3])
                     ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
-                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
+                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": user, "pass": passw, "from": from_email, "ehlo": ehlo})
             if not smtps: raise Exception("smtp.txt is empty.")
             console.print(f"\n[yellow]Testing {len(smtps)} SMTPs...[/yellow]")
             for i, smtp in enumerate(smtps):
@@ -473,9 +500,11 @@ def run():
             for line in open(CONFIG["smtp_path"]).readlines():
                 parts = line.strip().split("|")
                 if len(parts) >= 4:
-                    from_email = parts[4] if len(parts) > 4 else parts[2]
+                    from_email = decode_smart(parts[4] if len(parts) > 4 else parts[2])
+                    user = decode_smart(parts[2])
+                    passw = decode_smart(parts[3])
                     ehlo = parts[5] if len(parts) > 5 else (from_email.split('@')[1] if '@' in from_email else 'localhost')
-                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": parts[2], "pass": parts[3], "from": from_email, "ehlo": ehlo})
+                    smtps.append({"host": parts[0], "port": int(parts[1]), "user": user, "pass": passw, "from": from_email, "ehlo": ehlo})
             letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
