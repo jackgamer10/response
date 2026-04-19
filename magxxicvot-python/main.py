@@ -23,6 +23,7 @@ from rich.panel import Panel
 from rich import box
 import socks
 from urllib.parse import urlparse
+import mimetypes
 
 # Initialize Console
 console = Console()
@@ -48,6 +49,8 @@ CONFIG = {
     "use_proxy": True,
     "auto_validate_proxies": True,
     "attachment_type": "pdf",
+    "attachment_source": "convert", # "convert" or "pick"
+    "attachment_pick_path": "",
     "pdf_name": "Document",
     "encrypt_attachment": False,
     "encryption_password": "MaghxSecurePassword",
@@ -136,7 +139,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.4[/bold cyan]\n[blue]Ultra Speed & Stealth Header Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.5[/bold cyan]\n[blue]Ultra Speed & Multi-Attachment Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -344,20 +347,39 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
     msg.attach(MIMEText(replace_tags(content, reps, False), "html"))
 
     if CONFIG["attachment_type"] != "none":
-        att_html = replace_tags(open(CONFIG["attachment_html_path"]).read(), reps, True)
-        try:
-            import minify_html
-            if CONFIG["minify_html"]:
-                att_html = minify_html.minify(att_html, minify_js=True, remove_processing_instructions=True, ensure_spec_compliant_unquoted_attribute_values=True, keep_comments=False)
-        except: pass
-        att_name = replace_tags(CONFIG["pdf_name"], reps, True)
-        if CONFIG["attachment_type"] == "pdf": data, ext, ctype = html_to_pdf(att_html), ".pdf", "application/pdf"
-        elif CONFIG["attachment_type"] == "png": data, ext, ctype = html_to_png(att_html), ".png", "image/png"
-        elif CONFIG["attachment_type"] == "svg": data, ext, ctype = html_to_svg(att_html), ".svg", "image/svg+xml"
-        else: data, ext, ctype = att_html.encode(), ".html", "text/html"
-        if CONFIG["encrypt_attachment"]: data = encrypt_attachment(data, CONFIG["encryption_password"]); ext += ".enc"
-        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base_64(part); part.add_header("Content-Disposition", f'attachment; filename="{att_name}{ext}"'); msg.attach(part)
-        if CONFIG["sign_attachment"]: sig = hashlib.sha256(data).hexdigest(); part_sig = MIMEBase("text", "plain"); part_sig.set_payload(sig.encode()); part_sig.add_header("Content-Disposition", f'attachment; filename="{att_name}{ext}.sig"'); msg.attach(part_sig)
+        if CONFIG["attachment_source"] == "convert":
+            att_html = replace_tags(open(CONFIG["attachment_html_path"]).read(), reps, True)
+            try:
+                import minify_html
+                if CONFIG["minify_html"]:
+                    att_html = minify_html.minify(att_html, minify_js=True, remove_processing_instructions=True, ensure_spec_compliant_unquoted_attribute_values=True, keep_comments=False)
+            except: pass
+
+            att_name = replace_tags(CONFIG["pdf_name"], reps, True)
+            if CONFIG["attachment_type"] == "pdf": data, ext, ctype = html_to_pdf(att_html), ".pdf", "application/pdf"
+            elif CONFIG["attachment_type"] == "png": data, ext, ctype = html_to_png(att_html), ".png", "image/png"
+            elif CONFIG["attachment_type"] == "svg": data, ext, ctype = html_to_svg(att_html), ".svg", "image/svg+xml"
+            else: data, ext, ctype = att_html.encode(), ".html", "text/html"
+            filename = f"{att_name}{ext}"
+        else:
+            # Pick source
+            with open(CONFIG["attachment_pick_path"], "rb") as f: data = f.read()
+            ext = os.path.splitext(CONFIG["attachment_pick_path"])[1]
+            ctype = mimetypes.guess_type(CONFIG["attachment_pick_path"])[0] or "application/octet-stream"
+            att_name = replace_tags(CONFIG["pdf_name"], reps, True)
+            filename = f"{att_name}{ext}"
+
+        if CONFIG["encrypt_attachment"]: data = encrypt_attachment(data, CONFIG["encryption_password"]); filename += ".enc"
+
+        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        msg.attach(part)
+
+        if CONFIG["sign_attachment"]:
+            sig = hashlib.sha256(data).hexdigest()
+            part_sig = MIMEBase("text", "plain"); part_sig.set_payload(sig.encode())
+            part_sig.add_header("Content-Disposition", f'attachment; filename="{filename}.sig"')
+            msg.attach(part_sig)
 
     def get_conn():
         if proxy:
@@ -453,12 +475,22 @@ def run():
     if CONFIG["unique_url"]:
         CONFIG["base_url"] = console.input("[bold blue]Base URL for Unique Generation: [/bold blue]")
 
-    CONFIG["attachment_type"] = console.input("[bold blue]Attachment (pdf/png/svg/html/none): [/bold blue]").lower()
-    if CONFIG["attachment_type"] != "none":
-        CONFIG["pdf_name"] = console.input("[bold blue]Filename (tags OK): [/bold blue]") or "Document"
+    has_att = console.input("[bold blue]Include Attachment? (y/n): [/bold blue]").lower() == 'y'
+    if has_att:
+        source = console.input("[bold blue]Attachment Source (1: Convert HTML, 2: Pick Existing File): [/bold blue]")
+        if source == "2":
+            CONFIG["attachment_source"] = "pick"
+            CONFIG["attachment_pick_path"] = console.input("[bold blue]Path to File: [/bold blue]")
+        else:
+            CONFIG["attachment_source"] = "convert"
+            CONFIG["attachment_type"] = console.input("[bold blue]Convert to (pdf/png/svg/html): [/bold blue]").lower()
+
+        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK, NO extension): [/bold blue]") or "Document"
         CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["send_barcode_in_attachment"] = console.input("[bold blue]Send Barcode in Attachment? (y/n): [/bold blue]").lower() == 'y'
+    else:
+        CONFIG["attachment_type"] = "none"
 
     CONFIG["send_barcode_in_letter"] = console.input("[bold blue]Send Barcode in Letter Body? (y/n): [/bold blue]").lower() == 'y'
 

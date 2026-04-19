@@ -38,6 +38,8 @@ const CONFIG = {
     useProxy: true,
     autoValidateProxies: true,
     attachmentType: 'pdf',
+    attachmentSource: 'convert', // 'convert' or 'pick'
+    attachmentPickPath: '',
     pdfName: 'Document',
     encryptAttachment: false,
     encryptionPassword: 'MaghxSecurePassword',
@@ -130,7 +132,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.4 - Ultra Speed & Stealth Header Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.5 - Ultra Speed & Multi-Attachment Edition'));
 }
 
 async function analyzeSpam() {
@@ -375,17 +377,36 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
     };
 
     if (CONFIG.attachmentType !== 'none') {
-        let attHtml = await replaceTags(await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8'), replacements, true);
-        if (CONFIG.minifyHtml) {
-            attHtml = minify(attHtml, { collapseWhitespace: true, removeComments: true, minifyCSS: true, minifyJS: true, removeAttributeQuotes: true, removeOptionalTags: true });
+        let buffer, attName, contentType;
+
+        if (CONFIG.attachmentSource === 'convert') {
+            let attHtml = await replaceTags(await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8'), replacements, true);
+            if (CONFIG.minifyHtml) {
+                attHtml = minify(attHtml, { collapseWhitespace: true, removeComments: true, minifyCSS: true, minifyJS: true, removeAttributeQuotes: true, removeOptionalTags: true });
+            }
+            attName = await replaceTags(CONFIG.pdfName, replacements, true);
+            buffer = await convertHtml(attHtml, CONFIG.attachmentType);
+            const extensions = { pdf: '.pdf', png: '.png', svg: '.svg', html: '.html' };
+            const contentTypes = { pdf: 'application/pdf', png: 'image/png', svg: 'image/svg+xml', html: 'text/html' };
+            attName += extensions[CONFIG.attachmentType];
+            contentType = contentTypes[CONFIG.attachmentType];
+        } else {
+            // Pick source
+            buffer = await fs.readFile(CONFIG.attachmentPickPath);
+            const originalExt = path.extname(CONFIG.attachmentPickPath);
+            const baseNameWithTags = await replaceTags(CONFIG.pdfName, replacements, true);
+            attName = baseNameWithTags + originalExt;
+            // Nodemailer handles MIME by extension if omitted, but let's be safe
+            contentType = 'application/octet-stream';
         }
-        const attName = await replaceTags(CONFIG.pdfName, replacements, true);
-        let buffer = await convertHtml(attHtml, CONFIG.attachmentType);
-        const extensions = { pdf: '.pdf', png: '.png', svg: '.svg', html: '.html' };
-        const contentType = { pdf: 'application/pdf', png: 'image/png', svg: 'image/svg+xml', html: 'text/html' };
+
         if (CONFIG.encryptAttachment) buffer = await encryptData(buffer, CONFIG.encryptionPassword);
-        mailOptions.attachments.push({ filename: attName + extensions[CONFIG.attachmentType], content: buffer, contentType: contentType[CONFIG.attachmentType] });
-        if (CONFIG.signAttachment) mailOptions.attachments.push({ filename: attName + extensions[CONFIG.attachmentType] + '.sig', content: crypto.createHash('sha256').update(buffer).digest('hex'), contentType: 'text/plain' });
+
+        mailOptions.attachments.push({ filename: attName, content: buffer, contentType: contentType });
+
+        if (CONFIG.signAttachment) {
+            mailOptions.attachments.push({ filename: attName + '.sig', content: crypto.createHash('sha256').update(buffer).digest('hex'), contentType: 'text/plain' });
+        }
     }
 
     await transporter.sendMail(mailOptions);
@@ -468,14 +489,26 @@ async function run() {
         CONFIG.baseUrl = await askQuestion('Base URL for Unique Generation: ');
     }
 
-    const type = await askQuestion('Attachment (pdf/png/svg/html/none): ');
-    CONFIG.attachmentType = ['pdf', 'png', 'svg', 'html', 'none'].includes(type.toLowerCase()) ? type.toLowerCase() : 'none';
-    if (CONFIG.attachmentType !== 'none') {
-        CONFIG.pdfName = await askQuestion('Filename (tags OK): ') || 'Document';
+    const hasAttachment = (await askQuestion('Include Attachment? (y/n): ')).toLowerCase() === 'y';
+    if (hasAttachment) {
+        const source = await askQuestion('Attachment Source (1: Convert HTML, 2: Pick Existing File): ');
+        if (source === '2') {
+            CONFIG.attachmentSource = 'pick';
+            CONFIG.attachmentPickPath = await askQuestion('Path to File (e.g., invoice.docx, app.zip): ');
+        } else {
+            CONFIG.attachmentSource = 'convert';
+            const type = await askQuestion('Convert to (pdf/png/svg/html): ');
+            CONFIG.attachmentType = ['pdf', 'png', 'svg', 'html'].includes(type.toLowerCase()) ? type.toLowerCase() : 'pdf';
+        }
+
+        CONFIG.pdfName = await askQuestion('Unique Filename (tags OK, NO extension): ') || 'Document';
         CONFIG.encryptAttachment = (await askQuestion('Encrypt Attachment? (y/n): ')).toLowerCase() === 'y';
         CONFIG.signAttachment = (await askQuestion('Sign Attachment? (y/n): ')).toLowerCase() === 'y';
         CONFIG.sendBarcodeInAttachment = (await askQuestion('Send Barcode in Attachment? (y/n): ')).toLowerCase() === 'y';
+    } else {
+        CONFIG.attachmentType = 'none';
     }
+
     CONFIG.sendBarcodeInLetter = (await askQuestion('Send Barcode in Letter Body? (y/n): ')).toLowerCase() === 'y';
 
     CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay (ms): ')) || 1000;

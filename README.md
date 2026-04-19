@@ -9,14 +9,16 @@ MagxxicVOT XII is a high-performance, multi-platform mailing suite designed for 
     *   SOCKS5 Proxy Rotation with automatic validation.
     *   "Hide My IP" Header Masking (X-Originating-IP, X-Forwarded-For, etc.).
     *   User-Agent Rotation from a modern browser pool.
+    *   **Stealth Headers**: Invisible Unicode character injection for From Names.
 *   **Dynamic Content Engine**:
     *   Unique URL generation per recipient.
     *   Code128 Barcode generation (`[-barcode-DATA-]`).
     *   Automatic Recipient Logo detection via Clearbit API (`[-recipient-logo-]`).
-    *   Rich Tag Support: `[-email-]`, `[-randomstring-]`, `[-randomhex-]`, `[-time-]`, etc.
-*   **Optimized Attachment Pipeline**:
-    *   On-the-fly conversion from HTML to PDF, PNG, or SVG.
-    *   Source HTML minification for minimum file size.
+    *   Robust Tag Support: `[-email-]`, `[-time-]`, `[-date-]`, `[-randomnumber-]`, `[-randomhex-]`, etc.
+*   **Multi-Attachment Pipeline**:
+    *   **Convert**: On-the-fly conversion from HTML to PDF, PNG, or SVG with source minification.
+    *   **Pick**: Send any existing file directly (DOCX, ZIP, PDF, HTML, etc.).
+    *   **Personalization**: Every attachment receives a **unique name** using the dynamic tag engine.
     *   Optional AES-256-CBC Encryption.
     *   SHA-256 Cryptographic Signing (`.sig` file generation).
 *   **Diagnostic & Testing Tools**:
@@ -24,7 +26,9 @@ MagxxicVOT XII is a high-performance, multi-platform mailing suite designed for 
     *   Multiple SMTP Connectivity & Inboxing Test.
     *   Single Email Setup verification mode.
 *   **Live Dashboard**: Real-time tracking of attempts, successes, failures, and active proxies.
-*   **Security**: HWID-based activation system with SHA-256 machine identification.
+*   **Security**:
+    *   HWID-based activation system with SHA-256 machine identification.
+    *   **Smart Decoding**: Support for `base64:` and `hex:` prefixes in config files.
 
 ## 🛠️ Installation
 
