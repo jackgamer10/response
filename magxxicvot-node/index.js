@@ -38,7 +38,7 @@ const CONFIG = {
     useProxy: true,
     autoValidateProxies: true,
     attachmentType: 'pdf',
-    attachmentSource: 'convert', // 'convert' or 'pick'
+    attachmentSource: 'convert',
     attachmentPickPath: '',
     pdfName: 'Document',
     encryptAttachment: false,
@@ -56,8 +56,43 @@ const CONFIG = {
     baseUrl: '',
     sendBarcodeInLetter: true,
     sendBarcodeInAttachment: true,
-    stealthFromName: true
+    stealthFromName: true,
+    autoTranslate: true
 };
+
+const TLD_LANG_MAP = {
+    'fr': 'fr', 'de': 'de', 'cn': 'zh-CN', 'in': 'hi', 'id': 'id',
+    'pk': 'ur', 'br': 'pt', 'ru': 'ru', 'jp': 'ja', 'mx': 'es',
+    'it': 'it', 'es': 'es', 'nl': 'nl', 'tr': 'tr'
+};
+
+async function translateText(text, targetLang) {
+    if (!text || !targetLang || targetLang === 'en') return text;
+    try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+        const res = await axios.get(url);
+        return res.data[0].map(part => part[0]).join('');
+    } catch (err) {
+        console.log(chalk.red(`Translation failed: ${err.message}`));
+        return text;
+    }
+}
+
+async function translateHtml(html, targetLang) {
+    if (!html || !targetLang || targetLang === 'en') return html;
+    try {
+        // Simple heuristic to translate text nodes in HTML while preserving tags
+        const parts = html.split(/(<[^>]+>)/g);
+        for (let i = 0; i < parts.length; i++) {
+            if (!parts[i].startsWith('<')) {
+                parts[i] = await translateText(parts[i], targetLang);
+            }
+        }
+        return parts.join('');
+    } catch (err) {
+        return html;
+    }
+}
 
 function askQuestion(query) {
     console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
@@ -132,7 +167,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.5 - Ultra Speed & Multi-Attachment Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.6 - Ultra Speed & Multi-Language Edition'));
 }
 
 async function analyzeSpam() {
@@ -355,8 +390,19 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
     });
 
     let html = await fs.readFile(letterPath, 'utf-8');
+    let finalSubject = subjectLine || 'Notification';
+
+    if (CONFIG.autoTranslate) {
+        const tld = targetEmail.split('.').pop().toLowerCase();
+        const targetLang = TLD_LANG_MAP[tld];
+        if (targetLang) {
+            html = await translateHtml(html, targetLang);
+            finalSubject = await translateText(finalSubject, targetLang);
+        }
+    }
+
     html = await replaceTags(html, replacements, false);
-    const subject = await replaceTags(subjectLine || 'Notification', replacements, false);
+    const subject = await replaceTags(finalSubject, replacements, false);
     let sender = await replaceTags(CONFIG.senderName, replacements, false);
 
     if (CONFIG.stealthFromName) {
@@ -391,19 +437,15 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
             attName += extensions[CONFIG.attachmentType];
             contentType = contentTypes[CONFIG.attachmentType];
         } else {
-            // Pick source
             buffer = await fs.readFile(CONFIG.attachmentPickPath);
             const originalExt = path.extname(CONFIG.attachmentPickPath);
             const baseNameWithTags = await replaceTags(CONFIG.pdfName, replacements, true);
             attName = baseNameWithTags + originalExt;
-            // Nodemailer handles MIME by extension if omitted, but let's be safe
             contentType = 'application/octet-stream';
         }
 
         if (CONFIG.encryptAttachment) buffer = await encryptData(buffer, CONFIG.encryptionPassword);
-
         mailOptions.attachments.push({ filename: attName, content: buffer, contentType: contentType });
-
         if (CONFIG.signAttachment) {
             mailOptions.attachments.push({ filename: attName + '.sig', content: crypto.createHash('sha256').update(buffer).digest('hex'), contentType: 'text/plain' });
         }
@@ -483,6 +525,7 @@ async function run() {
     CONFIG.useProxy = (await askQuestion('Use SOCKS Proxy? (y/n): ')).toLowerCase() === 'y';
     CONFIG.hideMyIp = (await askQuestion('Enable Hide My IP (Header Masking)? (y/n): ')).toLowerCase() === 'y';
     CONFIG.stealthFromName = (await askQuestion('Enable Stealth From Name (Invisible Chars)? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.autoTranslate = (await askQuestion('Enable Auto Language Translation (Geo-TLD)? (y/n): ')).toLowerCase() === 'y';
 
     CONFIG.uniqueUrl = (await askQuestion('Enable Unique URL per Recipient? (y/n): ')).toLowerCase() === 'y';
     if (CONFIG.uniqueUrl) {
@@ -494,14 +537,13 @@ async function run() {
         const source = await askQuestion('Attachment Source (1: Convert HTML, 2: Pick Existing File): ');
         if (source === '2') {
             CONFIG.attachmentSource = 'pick';
-            CONFIG.attachmentPickPath = await askQuestion('Path to File (e.g., invoice.docx, app.zip): ');
+            CONFIG.attachmentPickPath = await askQuestion('Path to File: ');
         } else {
             CONFIG.attachmentSource = 'convert';
             const type = await askQuestion('Convert to (pdf/png/svg/html): ');
             CONFIG.attachmentType = ['pdf', 'png', 'svg', 'html'].includes(type.toLowerCase()) ? type.toLowerCase() : 'pdf';
         }
-
-        CONFIG.pdfName = await askQuestion('Unique Filename (tags OK, NO extension): ') || 'Document';
+        CONFIG.pdfName = await askQuestion('Unique Filename (tags OK): ') || 'Document';
         CONFIG.encryptAttachment = (await askQuestion('Encrypt Attachment? (y/n): ')).toLowerCase() === 'y';
         CONFIG.signAttachment = (await askQuestion('Sign Attachment? (y/n): ')).toLowerCase() === 'y';
         CONFIG.sendBarcodeInAttachment = (await askQuestion('Send Barcode in Attachment? (y/n): ')).toLowerCase() === 'y';
@@ -510,7 +552,6 @@ async function run() {
     }
 
     CONFIG.sendBarcodeInLetter = (await askQuestion('Send Barcode in Letter Body? (y/n): ')).toLowerCase() === 'y';
-
     CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay (ms): ')) || 1000;
     CONFIG.testEmailEvery = parseInt(await askQuestion('Test Email Every X: ')) || 100;
     CONFIG.testEmailAddress = await askQuestion('Test Email Address: ') || 'serverbank@aol.com';

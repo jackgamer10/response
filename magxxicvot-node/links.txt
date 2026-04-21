@@ -1,0 +1,3 @@
+# Links to rotate
+http://example.com/link1
+http://example.com/link2

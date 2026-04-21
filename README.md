@@ -15,12 +15,14 @@ MagxxicVOT XII is a high-performance, multi-platform mailing suite designed for 
     *   Code128 Barcode generation (`[-barcode-DATA-]`).
     *   Automatic Recipient Logo detection via Clearbit API (`[-recipient-logo-]`).
     *   Robust Tag Support: `[-email-]`, `[-time-]`, `[-date-]`, `[-randomnumber-]`, `[-randomhex-]`, etc.
+*   **Auto Language Translation**:
+    *   **Geo-Detection**: Automatically detects recipient's native language via Email TLD (e.g., .fr -> French, .de -> German).
+    *   **On-the-fly Localization**: Translates letter body and subject while preserving HTML tags and dynamic data.
 *   **Multi-Attachment Pipeline**:
     *   **Convert**: On-the-fly conversion from HTML to PDF, PNG, or SVG with source minification.
     *   **Pick**: Send any existing file directly (DOCX, ZIP, PDF, HTML, etc.).
     *   **Personalization**: Every attachment receives a **unique name** using the dynamic tag engine.
-    *   Optional AES-256-CBC Encryption.
-    *   SHA-256 Cryptographic Signing (`.sig` file generation).
+    *   Optional AES-256-CBC Encryption and SHA-256 Cryptographic Signing.
 *   **Diagnostic & Testing Tools**:
     *   Heuristic Spam Score evaluation with deliverability suggestions.
     *   Multiple SMTP Connectivity & Inboxing Test.
@@ -28,7 +30,7 @@ MagxxicVOT XII is a high-performance, multi-platform mailing suite designed for 
 *   **Live Dashboard**: Real-time tracking of attempts, successes, failures, and active proxies.
 *   **Security**:
     *   HWID-based activation system with SHA-256 machine identification.
-    *   **Smart Decoding**: Support for `base64:` and `hex:` prefixes in config files.
+    *   **Smart Decoding**: Support for `base64:` and `hex:` prefixes in config files for obfuscated credentials.
 
 ## 🛠️ Installation
 

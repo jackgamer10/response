@@ -49,7 +49,7 @@ CONFIG = {
     "use_proxy": True,
     "auto_validate_proxies": True,
     "attachment_type": "pdf",
-    "attachment_source": "convert", # "convert" or "pick"
+    "attachment_source": "convert",
     "attachment_pick_path": "",
     "pdf_name": "Document",
     "encrypt_attachment": False,
@@ -67,8 +67,33 @@ CONFIG = {
     "base_url": "",
     "send_barcode_in_letter": True,
     "send_barcode_in_attachment": True,
-    "stealth_from_name": True
+    "stealth_from_name": True,
+    "auto_translate": True
 }
+
+TLD_LANG_MAP = {
+    'fr': 'fr', 'de': 'de', 'cn': 'zh-CN', 'in': 'hi', 'id': 'id',
+    'pk': 'ur', 'br': 'pt', 'ru': 'ru', 'jp': 'ja', 'mx': 'es',
+    'it': 'it', 'es': 'es', 'nl': 'nl', 'tr': 'tr'
+}
+
+def translate_text(text, target_lang):
+    if not text or not target_lang or target_lang == 'en': return text
+    try:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl={target_lang}&dt=t&q={requests.utils.quote(text)}"
+        res = requests.get(url, timeout=10)
+        return "".join([part[0] for part in res.json()[0]])
+    except: return text
+
+def translate_html(html, target_lang):
+    if not html or not target_lang or target_lang == 'en': return html
+    try:
+        parts = re.split(r'(<[^>]+>)', html)
+        for i in range(len(parts)):
+            if not parts[i].startswith('<') and parts[i].strip():
+                parts[i] = translate_text(parts[i], target_lang)
+        return "".join(parts)
+    except: return html
 
 stats = {"sent": 0, "success": 0, "failed": 0, "current_proxy": "None"}
 
@@ -139,7 +164,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.5[/bold cyan]\n[blue]Ultra Speed & Multi-Attachment Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.6[/bold cyan]\n[blue]Ultra Speed & Multi-Language Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -321,7 +346,18 @@ def html_to_svg(html_content):
 
 def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line):
     msg = MIMEMultipart()
-    msg["Subject"] = replace_tags(subject_line, reps, False)
+
+    letter_html = open(letter_path, "r", encoding="utf-8").read()
+    final_subject = subject_line
+
+    if CONFIG["auto_translate"]:
+        tld = target_email.split('.')[-1].lower()
+        target_lang = TLD_LANG_MAP.get(tld)
+        if target_lang:
+            letter_html = translate_html(letter_html, target_lang)
+            final_subject = translate_text(final_subject, target_lang)
+
+    msg["Subject"] = replace_tags(final_subject, reps, False)
 
     sender_name = replace_tags(CONFIG["sender_name"], reps, False)
     if CONFIG["stealth_from_name"]:
@@ -343,8 +379,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
         msg["X-Remote-IP"] = "127.0.0.1"
         msg["X-Client-IP"] = "127.0.0.1"
 
-    with open(letter_path, "r", encoding="utf-8") as f: content = f.read()
-    msg.attach(MIMEText(replace_tags(content, reps, False), "html"))
+    msg.attach(MIMEText(replace_tags(letter_html, reps, False), "html"))
 
     if CONFIG["attachment_type"] != "none":
         if CONFIG["attachment_source"] == "convert":
@@ -362,7 +397,6 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
             else: data, ext, ctype = att_html.encode(), ".html", "text/html"
             filename = f"{att_name}{ext}"
         else:
-            # Pick source
             with open(CONFIG["attachment_pick_path"], "rb") as f: data = f.read()
             ext = os.path.splitext(CONFIG["attachment_pick_path"])[1]
             ctype = mimetypes.guess_type(CONFIG["attachment_pick_path"])[0] or "application/octet-stream"
@@ -470,6 +504,7 @@ def run():
     CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["hide_my_ip"] = console.input("[bold blue]Enable Hide My IP (Header Masking)? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["stealth_from_name"] = console.input("[bold blue]Enable Stealth From Name (Invisible Chars)? (y/n): [/bold blue]").lower() == 'y'
+    CONFIG["auto_translate"] = console.input("[bold blue]Enable Auto Language Translation (Geo-TLD)? (y/n): [/bold blue]").lower() == 'y'
 
     CONFIG["unique_url"] = console.input("[bold blue]Enable Unique URL per Recipient? (y/n): [/bold blue]").lower() == 'y'
     if CONFIG["unique_url"]:
@@ -485,7 +520,7 @@ def run():
             CONFIG["attachment_source"] = "convert"
             CONFIG["attachment_type"] = console.input("[bold blue]Convert to (pdf/png/svg/html): [/bold blue]").lower()
 
-        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK, NO extension): [/bold blue]") or "Document"
+        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK): [/bold blue]") or "Document"
         CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["send_barcode_in_attachment"] = console.input("[bold blue]Send Barcode in Attachment? (y/n): [/bold blue]").lower() == 'y'
@@ -493,7 +528,6 @@ def run():
         CONFIG["attachment_type"] = "none"
 
     CONFIG["send_barcode_in_letter"] = console.input("[bold blue]Send Barcode in Letter Body? (y/n): [/bold blue]").lower() == 'y'
-
     CONFIG["delay"] = float(console.input("[bold blue]Delay (seconds): [/bold blue]") or 1.0)
     CONFIG["test_every"] = int(console.input("[bold blue]Test Email Every X: [/bold blue]") or 100)
     CONFIG["test_email"] = console.input("[bold blue]Test Email Address: [/bold blue]") or "serverbank@aol.com"

@@ -1,0 +1,2 @@
+# Proxy list (format: host:port or user:pass@host:port)
+127.0.0.1:1080
