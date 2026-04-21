@@ -13,9 +13,11 @@ const bwipjs = require('bwip-js');
 const axios = require('axios');
 const chalk = require('chalk');
 const net = require('net');
+const dns = require('dns').promises;
 
 let stats = { sent: 0, success: 0, failed: 0, currentProxy: 'None' };
 let browser;
+let geoCache = {};
 
 const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -60,11 +62,32 @@ const CONFIG = {
     autoTranslate: true
 };
 
-const TLD_LANG_MAP = {
-    'fr': 'fr', 'de': 'de', 'cn': 'zh-CN', 'in': 'hi', 'id': 'id',
-    'pk': 'ur', 'br': 'pt', 'ru': 'ru', 'jp': 'ja', 'mx': 'es',
-    'it': 'it', 'es': 'es', 'nl': 'nl', 'tr': 'tr'
+const COUNTRY_LANG_MAP = {
+    'FR': 'fr', 'DE': 'de', 'CN': 'zh-CN', 'IN': 'hi', 'ID': 'id',
+    'PK': 'ur', 'BR': 'pt', 'RU': 'ru', 'JP': 'ja', 'MX': 'es',
+    'IT': 'it', 'ES': 'es', 'NL': 'nl', 'TR': 'tr', 'US': 'en',
+    'GB': 'en', 'CA': 'en', 'AU': 'en'
 };
+
+async function getDomainLocation(domain) {
+    if (geoCache[domain]) return geoCache[domain];
+    try {
+        const mxRecords = await dns.resolveMx(domain);
+        if (mxRecords && mxRecords.length > 0) {
+            const exchange = mxRecords[0].exchange;
+            const addresses = await dns.resolve4(exchange);
+            if (addresses && addresses.length > 0) {
+                const res = await axios.get(`http://ip-api.com/json/${addresses[0]}?fields=status,countryCode`);
+                if (res.data.status === 'success') {
+                    const countryCode = res.data.countryCode;
+                    geoCache[domain] = countryCode;
+                    return countryCode;
+                }
+            }
+        }
+    } catch (err) {}
+    return 'US'; // Default fallback
+}
 
 async function translateText(text, targetLang) {
     if (!text || !targetLang || targetLang === 'en') return text;
@@ -73,7 +96,6 @@ async function translateText(text, targetLang) {
         const res = await axios.get(url);
         return res.data[0].map(part => part[0]).join('');
     } catch (err) {
-        console.log(chalk.red(`Translation failed: ${err.message}`));
         return text;
     }
 }
@@ -81,10 +103,9 @@ async function translateText(text, targetLang) {
 async function translateHtml(html, targetLang) {
     if (!html || !targetLang || targetLang === 'en') return html;
     try {
-        // Simple heuristic to translate text nodes in HTML while preserving tags
         const parts = html.split(/(<[^>]+>)/g);
         for (let i = 0; i < parts.length; i++) {
-            if (!parts[i].startsWith('<')) {
+            if (!parts[i].startsWith('<') && parts[i].trim().length > 0) {
                 parts[i] = await translateText(parts[i], targetLang);
             }
         }
@@ -167,7 +188,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.6 - Ultra Speed & Multi-Language Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.7 - Ultra Speed & Advanced Geo-Bypass Edition'));
 }
 
 async function analyzeSpam() {
@@ -393,9 +414,16 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
     let finalSubject = subjectLine || 'Notification';
 
     if (CONFIG.autoTranslate) {
-        const tld = targetEmail.split('.').pop().toLowerCase();
-        const targetLang = TLD_LANG_MAP[tld];
-        if (targetLang) {
+        const domain = targetEmail.split('@').pop().toLowerCase();
+        const tld = domain.split('.').pop();
+        let targetLang = COUNTRY_LANG_MAP[tld.toUpperCase()];
+
+        if (!targetLang && ['.com', '.net', '.org'].some(ext => domain.endsWith(ext))) {
+            const countryCode = await getDomainLocation(domain);
+            targetLang = COUNTRY_LANG_MAP[countryCode];
+        }
+
+        if (targetLang && targetLang !== 'en') {
             html = await translateHtml(html, targetLang);
             finalSubject = await translateText(finalSubject, targetLang);
         }
@@ -525,7 +553,7 @@ async function run() {
     CONFIG.useProxy = (await askQuestion('Use SOCKS Proxy? (y/n): ')).toLowerCase() === 'y';
     CONFIG.hideMyIp = (await askQuestion('Enable Hide My IP (Header Masking)? (y/n): ')).toLowerCase() === 'y';
     CONFIG.stealthFromName = (await askQuestion('Enable Stealth From Name (Invisible Chars)? (y/n): ')).toLowerCase() === 'y';
-    CONFIG.autoTranslate = (await askQuestion('Enable Auto Language Translation (Geo-TLD)? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.autoTranslate = (await askQuestion('Enable Auto Language Translation (Advanced Geo-IP)? (y/n): ')).toLowerCase() === 'y';
 
     CONFIG.uniqueUrl = (await askQuestion('Enable Unique URL per Recipient? (y/n): ')).toLowerCase() === 'y';
     if (CONFIG.uniqueUrl) {

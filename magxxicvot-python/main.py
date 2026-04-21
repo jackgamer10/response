@@ -24,6 +24,7 @@ from rich import box
 import socks
 from urllib.parse import urlparse
 import mimetypes
+import dns.resolver
 
 # Initialize Console
 console = Console()
@@ -71,11 +72,29 @@ CONFIG = {
     "auto_translate": True
 }
 
-TLD_LANG_MAP = {
-    'fr': 'fr', 'de': 'de', 'cn': 'zh-CN', 'in': 'hi', 'id': 'id',
-    'pk': 'ur', 'br': 'pt', 'ru': 'ru', 'jp': 'ja', 'mx': 'es',
-    'it': 'it', 'es': 'es', 'nl': 'nl', 'tr': 'tr'
+COUNTRY_LANG_MAP = {
+    'FR': 'fr', 'DE': 'de', 'CN': 'zh-CN', 'IN': 'hi', 'ID': 'id',
+    'PK': 'ur', 'BR': 'pt', 'RU': 'ru', 'JP': 'ja', 'MX': 'es',
+    'IT': 'it', 'ES': 'es', 'NL': 'nl', 'TR': 'tr', 'US': 'en',
+    'GB': 'en', 'CA': 'en', 'AU': 'en'
 }
+
+geo_cache = {}
+
+def get_domain_location(domain):
+    if domain in geo_cache: return geo_cache[domain]
+    try:
+        answers = dns.resolver.resolve(domain, 'MX')
+        if answers:
+            mx = str(answers[0].exchange).rstrip('.')
+            ip = socket.gethostbyname(mx)
+            res = requests.get(f"http://ip-api.com/json/{ip}?fields=status,countryCode", timeout=10)
+            if res.json().get('status') == 'success':
+                cc = res.json().get('countryCode')
+                geo_cache[domain] = cc
+                return cc
+    except: pass
+    return "US"
 
 def translate_text(text, target_lang):
     if not text or not target_lang or target_lang == 'en': return text
@@ -164,7 +183,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.6[/bold cyan]\n[blue]Ultra Speed & Multi-Language Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.7[/bold cyan]\n[blue]Ultra Speed & Advanced Geo-Bypass Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -351,9 +370,15 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
     final_subject = subject_line
 
     if CONFIG["auto_translate"]:
-        tld = target_email.split('.')[-1].lower()
-        target_lang = TLD_LANG_MAP.get(tld)
-        if target_lang:
+        domain = target_email.split('@')[-1].lower()
+        tld = domain.split('.')[-1]
+        target_lang = COUNTRY_LANG_MAP.get(tld.upper())
+
+        if not target_lang and any(domain.endswith(ext) for ext in ['.com', '.net', '.org']):
+            cc = get_domain_location(domain)
+            target_lang = COUNTRY_LANG_MAP.get(cc)
+
+        if target_lang and target_lang != 'en':
             letter_html = translate_html(letter_html, target_lang)
             final_subject = translate_text(final_subject, target_lang)
 
@@ -405,7 +430,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
 
         if CONFIG["encrypt_attachment"]: data = encrypt_attachment(data, CONFIG["encryption_password"]); filename += ".enc"
 
-        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base64(part)
+        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base_64(part)
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         msg.attach(part)
 
@@ -504,7 +529,7 @@ def run():
     CONFIG["use_proxy"] = console.input("[bold blue]Use SOCKS Proxy? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["hide_my_ip"] = console.input("[bold blue]Enable Hide My IP (Header Masking)? (y/n): [/bold blue]").lower() == 'y'
     CONFIG["stealth_from_name"] = console.input("[bold blue]Enable Stealth From Name (Invisible Chars)? (y/n): [/bold blue]").lower() == 'y'
-    CONFIG["auto_translate"] = console.input("[bold blue]Enable Auto Language Translation (Geo-TLD)? (y/n): [/bold blue]").lower() == 'y'
+    CONFIG["auto_translate"] = console.input("[bold blue]Enable Auto Language Translation (Advanced Geo-IP)? (y/n): [/bold blue]").lower() == 'y'
 
     CONFIG["unique_url"] = console.input("[bold blue]Enable Unique URL per Recipient? (y/n): [/bold blue]").lower() == 'y'
     if CONFIG["unique_url"]:
@@ -520,7 +545,7 @@ def run():
             CONFIG["attachment_source"] = "convert"
             CONFIG["attachment_type"] = console.input("[bold blue]Convert to (pdf/png/svg/html): [/bold blue]").lower()
 
-        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK): [/bold blue]") or "Document"
+        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK, NO extension): [/bold blue]") or "Document"
         CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["send_barcode_in_attachment"] = console.input("[bold blue]Send Barcode in Attachment? (y/n): [/bold blue]").lower() == 'y'

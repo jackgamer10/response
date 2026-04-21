@@ -8,3 +8,4 @@ xhtml2pdf
 html2image
 minify-html
 psutil
+dnspython
