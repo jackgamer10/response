@@ -14,6 +14,7 @@ const axios = require('axios');
 const chalk = require('chalk');
 const net = require('net');
 const dns = require('dns').promises;
+const HTMLToDOCX = require('html-to-docx');
 
 let stats = { sent: 0, success: 0, failed: 0, currentProxy: 'None' };
 let browser;
@@ -86,7 +87,7 @@ async function getDomainLocation(domain) {
             }
         }
     } catch (err) {}
-    return 'US'; // Default fallback
+    return 'US';
 }
 
 async function translateText(text, targetLang) {
@@ -188,7 +189,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.7 - Ultra Speed & Advanced Geo-Bypass Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.8 - Ultra Speed & Multi-Format Edition'));
 }
 
 async function analyzeSpam() {
@@ -247,7 +248,11 @@ async function convertHtml(html, type) {
     await page.setContent(html, { waitUntil: 'networkidle0' });
     let buffer;
     if (type === 'pdf') {
-        buffer = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
+        buffer = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            preferCSSPageSize: true
+        });
     }
     else if (type === 'png') buffer = await page.screenshot({ fullPage: true });
     else if (type === 'svg') {
@@ -256,7 +261,15 @@ async function convertHtml(html, type) {
             return `<svg xmlns="http://www.w3.org/2000/svg" width="${body.scrollWidth}" height="${body.scrollHeight}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">${body.innerHTML}</div></foreignObject></svg>`;
         });
         buffer = Buffer.from(svgContent);
-    } else { buffer = Buffer.from(html); }
+    }
+    else if (type === 'docx') {
+        buffer = await HTMLToDOCX(html, null, {
+            table: { row: { cantSplit: true } },
+            footer: true,
+            pageNumber: true,
+        });
+    }
+    else { buffer = Buffer.from(html); }
     await page.close();
     return buffer;
 }
@@ -460,8 +473,8 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
             }
             attName = await replaceTags(CONFIG.pdfName, replacements, true);
             buffer = await convertHtml(attHtml, CONFIG.attachmentType);
-            const extensions = { pdf: '.pdf', png: '.png', svg: '.svg', html: '.html' };
-            const contentTypes = { pdf: 'application/pdf', png: 'image/png', svg: 'image/svg+xml', html: 'text/html' };
+            const extensions = { pdf: '.pdf', png: '.png', svg: '.svg', docx: '.docx', html: '.html' };
+            const contentTypes = { pdf: 'application/pdf', png: 'image/png', svg: 'image/svg+xml', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', html: 'text/html' };
             attName += extensions[CONFIG.attachmentType];
             contentType = contentTypes[CONFIG.attachmentType];
         } else {
@@ -568,8 +581,8 @@ async function run() {
             CONFIG.attachmentPickPath = await askQuestion('Path to File: ');
         } else {
             CONFIG.attachmentSource = 'convert';
-            const type = await askQuestion('Convert to (pdf/png/svg/html): ');
-            CONFIG.attachmentType = ['pdf', 'png', 'svg', 'html'].includes(type.toLowerCase()) ? type.toLowerCase() : 'pdf';
+            const type = await askQuestion('Convert to (pdf/png/svg/docx/html): ');
+            CONFIG.attachmentType = ['pdf', 'png', 'svg', 'docx', 'html'].includes(type.toLowerCase()) ? type.toLowerCase() : 'pdf';
         }
         CONFIG.pdfName = await askQuestion('Unique Filename (tags OK): ') || 'Document';
         CONFIG.encryptAttachment = (await askQuestion('Encrypt Attachment? (y/n): ')).toLowerCase() === 'y';

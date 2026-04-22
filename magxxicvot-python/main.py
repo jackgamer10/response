@@ -25,6 +25,7 @@ import socks
 from urllib.parse import urlparse
 import mimetypes
 import dns.resolver
+from docx import Document
 
 # Initialize Console
 console = Console()
@@ -183,7 +184,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.7[/bold cyan]\n[blue]Ultra Speed & Advanced Geo-Bypass Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.8[/bold cyan]\n[blue]Ultra Speed & Multi-Format Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -271,14 +272,12 @@ def replace_tags(text, replacements, is_attachment=False):
         else:
             new_text = re.sub(tag, val, new_text)
 
-    # Unique URL generation
     final_link = replacements.get("-link-", "")
     if CONFIG["unique_url"] and CONFIG["base_url"]:
         sep = "&" if "?" in CONFIG["base_url"] else "?"
         final_link = f"{CONFIG['base_url']}{sep}v={''.join(random.choices(string.ascii_letters + string.digits, k=12))}"
     new_text = new_text.replace("[-link-]", final_link).replace("[link]", final_link)
 
-    # Dynamic Logo
     logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
     new_text = new_text.replace("[-recipient-logo-]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
     new_text = new_text.replace("[recipient-logo]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
@@ -363,6 +362,17 @@ def html_to_svg(html_content):
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">{html_content}</div></foreignObject></svg>'
     return svg.encode()
 
+def html_to_docx(html_content):
+    try:
+        doc = Document()
+        # Simplistic conversion: extract text content
+        clean = re.sub('<[^<]+?>', '', html_content)
+        doc.add_paragraph(clean)
+        fp = BytesIO()
+        doc.save(fp)
+        return fp.getvalue()
+    except: return html_content.encode()
+
 def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line):
     msg = MIMEMultipart()
 
@@ -371,12 +381,8 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
 
     if CONFIG["auto_translate"]:
         domain = target_email.split('@')[-1].lower()
-        tld = domain.split('.')[-1]
-        target_lang = COUNTRY_LANG_MAP.get(tld.upper())
-
-        if not target_lang and any(domain.endswith(ext) for ext in ['.com', '.net', '.org']):
-            cc = get_domain_location(domain)
-            target_lang = COUNTRY_LANG_MAP.get(cc)
+        cc = get_domain_location(domain)
+        target_lang = COUNTRY_LANG_MAP.get(cc)
 
         if target_lang and target_lang != 'en':
             letter_html = translate_html(letter_html, target_lang)
@@ -419,6 +425,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
             if CONFIG["attachment_type"] == "pdf": data, ext, ctype = html_to_pdf(att_html), ".pdf", "application/pdf"
             elif CONFIG["attachment_type"] == "png": data, ext, ctype = html_to_png(att_html), ".png", "image/png"
             elif CONFIG["attachment_type"] == "svg": data, ext, ctype = html_to_svg(att_html), ".svg", "image/svg+xml"
+            elif CONFIG["attachment_type"] == "docx": data, ext, ctype = html_to_docx(att_html), ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             else: data, ext, ctype = att_html.encode(), ".html", "text/html"
             filename = f"{att_name}{ext}"
         else:
@@ -430,7 +437,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
 
         if CONFIG["encrypt_attachment"]: data = encrypt_attachment(data, CONFIG["encryption_password"]); filename += ".enc"
 
-        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base_64(part)
+        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base64(part)
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         msg.attach(part)
 
@@ -543,9 +550,9 @@ def run():
             CONFIG["attachment_pick_path"] = console.input("[bold blue]Path to File: [/bold blue]")
         else:
             CONFIG["attachment_source"] = "convert"
-            CONFIG["attachment_type"] = console.input("[bold blue]Convert to (pdf/png/svg/html): [/bold blue]").lower()
+            CONFIG["attachment_type"] = console.input("[bold blue]Convert to (pdf/png/svg/docx/html): [/bold blue]").lower()
 
-        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK, NO extension): [/bold blue]") or "Document"
+        CONFIG["pdf_name"] = console.input("[bold blue]Unique Filename (tags OK): [/bold blue]") or "Document"
         CONFIG["encrypt_attachment"] = console.input("[bold blue]Encrypt Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["sign_attachment"] = console.input("[bold blue]Sign Attachment? (y/n): [/bold blue]").lower() == 'y'
         CONFIG["send_barcode_in_attachment"] = console.input("[bold blue]Send Barcode in Attachment? (y/n): [/bold blue]").lower() == 'y'

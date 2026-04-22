@@ -9,3 +9,4 @@ html2image
 minify-html
 psutil
 dnspython
+python-docx
