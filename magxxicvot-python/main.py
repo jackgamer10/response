@@ -51,7 +51,7 @@ CONFIG = {
     "use_proxy": True,
     "auto_validate_proxies": True,
     "attachment_type": "pdf",
-    "attachment_source": "convert",
+    "attachment_source": "convert", # "convert" or "pick"
     "attachment_pick_path": "",
     "pdf_name": "Document",
     "encrypt_attachment": False,
@@ -149,8 +149,8 @@ def inject_stealth(text):
     if not text: return ""
     inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
     res = ""
-    for char in text:
-        res += char
+    for list_idx in range(len(text)):
+        res += text[list_idx]
         if random.random() > 0.7:
             res += random.choice(inv_chars)
     return res
@@ -184,7 +184,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.8[/bold cyan]\n[blue]Ultra Speed & Multi-Format Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.9[/bold cyan]\n[blue]Ultra Speed & Robust Logger Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -272,12 +272,14 @@ def replace_tags(text, replacements, is_attachment=False):
         else:
             new_text = re.sub(tag, val, new_text)
 
+    # Unique URL generation
     final_link = replacements.get("-link-", "")
     if CONFIG["unique_url"] and CONFIG["base_url"]:
         sep = "&" if "?" in CONFIG["base_url"] else "?"
         final_link = f"{CONFIG['base_url']}{sep}v={''.join(random.choices(string.ascii_letters + string.digits, k=12))}"
     new_text = new_text.replace("[-link-]", final_link).replace("[link]", final_link)
 
+    # Dynamic Logo
     logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
     new_text = new_text.replace("[-recipient-logo-]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
     new_text = new_text.replace("[recipient-logo]", f'<img src="{logo_url}" alt="Logo" style="max-height: 50px;">')
@@ -365,7 +367,6 @@ def html_to_svg(html_content):
 def html_to_docx(html_content):
     try:
         doc = Document()
-        # Simplistic conversion: extract text content
         clean = re.sub('<[^<]+?>', '', html_content)
         doc.add_paragraph(clean)
         fp = BytesIO()
@@ -497,7 +498,9 @@ def send_emails():
             for email in emails:
                 stats["sent"] += 1
                 if not validate_email(email):
-                    stats["failed"] += 1; live.update(get_stats_table()); continue
+                    stats["failed"] += 1
+                    with open("failed.txt", "a") as f: f.write(f"{email} [MALFORMED]\n")
+                    live.update(get_stats_table()); continue
 
                 attempts, sent = 0, False
                 while attempts < CONFIG["retry_attempts"] and not sent:
@@ -516,9 +519,11 @@ def send_emails():
                                 send_single_email(CONFIG["test_email"], smtp, proxy, reps, letter_path, current_subject)
                             except: pass
                             test_count = 0
-                    except Exception:
+                    except Exception as e:
                         attempts += 1
-                        if attempts >= CONFIG["retry_attempts"]: stats["failed"] += 1
+                        if attempts >= CONFIG["retry_attempts"]:
+                            stats["failed"] += 1
+                            with open("failed.txt", "a") as f: f.write(f"{email} [{e}]\n")
                         else: smtp_idx = (smtp_idx + 1) % len(smtps); prx_idx = (prx_idx + 1) % (len(proxies) or 1); time.sleep(1)
                     live.update(get_stats_table())
 

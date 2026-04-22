@@ -189,7 +189,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.8 - Ultra Speed & Multi-Format Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.9 - Ultra Speed & Robust Logger Edition'));
 }
 
 async function analyzeSpam() {
@@ -515,6 +515,7 @@ async function sendEmails() {
             stats.sent++;
             if (!validateEmail(email.trim())) {
                 stats.failed++;
+                await fs.appendFile('failed.txt', email.trim() + ' [MALFORMED]\n');
                 updateDashboard();
                 continue;
             }
@@ -539,7 +540,10 @@ async function sendEmails() {
                     attempts++;
                     smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
                     if (proxies.length) proxyIndex = (proxyIndex + 1) % proxies.length;
-                    if (attempts >= CONFIG.retryAttempts) stats.failed++;
+                    if (attempts >= CONFIG.retryAttempts) {
+                        stats.failed++;
+                        await fs.appendFile('failed.txt', email.trim() + ` [ERROR: ${err.message}]\n`);
+                    }
                     updateDashboard();
                     await new Promise(r => setTimeout(r, 2000));
                 }
