@@ -101,8 +101,33 @@ async function translateText(text, targetLang) {
     }
 }
 
+async function translateProtected(content, targetLang) {
+    if (!content || !targetLang || targetLang === 'en') return content;
+
+    // Protect tags like [-tag-] and [tag]
+    const placeholders = [];
+    let protectedContent = content.replace(/(\[-(.*?)-\]|\[(email|user|domain|domainname|time|date|link|random.*?)\])/g, (match) => {
+        const id = `__TAG_${placeholders.length}__`;
+        placeholders.push({ id, original: match });
+        return id;
+    });
+
+    // Translate the content with placeholders
+    let translated;
+    if (protectedContent.includes('<')) {
+        translated = await translateHtml(protectedContent, targetLang);
+    } else {
+        translated = await translateText(protectedContent, targetLang);
+    }
+
+    // Restore tags
+    for (const p of placeholders) {
+        translated = translated.split(p.id).join(p.original);
+    }
+    return translated;
+}
+
 async function translateHtml(html, targetLang) {
-    if (!html || !targetLang || targetLang === 'en') return html;
     try {
         const parts = html.split(/(<[^>]+>)/g);
         for (let i = 0; i < parts.length; i++) {
@@ -189,7 +214,7 @@ async function printLines() {
 ██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 `));
-    console.log(chalk.blue.bold('[+] MagxxicVOT XII v4.9 - Ultra Speed & Robust Logger Edition'));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v5.0 - Ultra Speed & Tag Preservation Edition'));
 }
 
 async function analyzeSpam() {
@@ -312,12 +337,17 @@ async function replaceTags(text, replacements, isAttachment = false) {
     const tagMap = {
         '[-email-]': email, '[email]': email,
         '[-emailuser-]': user, '[user]': user,
+        '[-emailusername-]': user, '[username]': user,
         '[-emaildomain-]': domain, '[domain]': domain,
         '[-emaildomainname-]': domainname, '[domainname]': domainname,
         '[-time-]': new Date().toLocaleTimeString(), '[time]': new Date().toLocaleTimeString(),
         '[-date-]': new Date().toLocaleDateString(), '[date]': new Date().toLocaleDateString(),
         '[-randomnumber-]': () => Math.floor(1000 + Math.random() * 9000).toString(),
         '[randomnumber]': () => Math.floor(1000 + Math.random() * 9000).toString(),
+        '[-randomnumber1-9-]': () => {
+            const digits = Math.floor(1 + Math.random() * 9);
+            return Math.floor(Math.pow(10, digits-1) + Math.random() * 9 * Math.pow(10, digits-1)).toString();
+        },
         '[-randomstring-]': () => randomstring.generate(10),
         '[randomstring]': () => randomstring.generate(10),
         '[-randomhex-]': () => crypto.randomBytes(4).toString('hex'),
@@ -428,17 +458,12 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
 
     if (CONFIG.autoTranslate) {
         const domain = targetEmail.split('@').pop().toLowerCase();
-        const tld = domain.split('.').pop();
-        let targetLang = COUNTRY_LANG_MAP[tld.toUpperCase()];
-
-        if (!targetLang && ['.com', '.net', '.org'].some(ext => domain.endsWith(ext))) {
-            const countryCode = await getDomainLocation(domain);
-            targetLang = COUNTRY_LANG_MAP[countryCode];
-        }
+        const cc = await getDomainLocation(domain);
+        const targetLang = COUNTRY_LANG_MAP[cc];
 
         if (targetLang && targetLang !== 'en') {
-            html = await translateHtml(html, targetLang);
-            finalSubject = await translateText(finalSubject, targetLang);
+            html = await translateProtected(html, targetLang);
+            finalSubject = await translateProtected(finalSubject, targetLang);
         }
     }
 
@@ -613,7 +638,7 @@ async function run() {
                     const reps = { '-email-': CONFIG.testEmailAddress };
                     const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
                     if (!letterFiles.length) throw new Error('letters/ directory is empty.');
-                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification [-randomnumber-] [-date-]');
+                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification [-randomnumber1-9-] [-date-]');
                     console.log(chalk.green(`[OK] SMTP ${i+1}: ${smtp.host} - Message Sent.`));
                 } catch (err) {
                     console.log(chalk.red(`[FAIL] SMTP ${i+1}: ${smtp.host} - Error: ${err.message}`));
@@ -633,7 +658,7 @@ async function run() {
             const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
             if (!smtps.length || !letterFiles.length) throw new Error('Missing SMTP or Letter for test.');
             const reps = { '-email-': CONFIG.testEmailAddress, '-link-': links[0] || '' };
-            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification [-randomnumber-] [-date-]');
+            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification [-randomnumber1-9-] [-date-]');
             console.log(chalk.green('Final Test email sent successfully!'));
         } catch (err) {
             console.log(chalk.red('Test email failed: ' + err.message));

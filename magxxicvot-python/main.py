@@ -115,6 +115,29 @@ def translate_html(html, target_lang):
         return "".join(parts)
     except: return html
 
+def translate_protected(content, target_lang):
+    if not content or not target_lang or target_lang == 'en': return content
+
+    # Protect tags like [-tag-] and [tag]
+    placeholders = []
+    def protect(match):
+        placeholder = f"__TAG_{len(placeholders)}__"
+        placeholders.append((placeholder, match.group(0)))
+        return placeholder
+
+    protected_content = re.sub(r'(\[-(.*?)-\]|\[(email|user|domain|domainname|time|date|link|random.*?)\])', protect, content)
+
+    # Translate
+    if '<' in protected_content:
+        translated = translate_html(protected_content, target_lang)
+    else:
+        translated = translate_text(protected_content, target_lang)
+
+    # Restore
+    for placeholder, original in placeholders:
+        translated = translated.replace(placeholder, original)
+    return translated
+
 stats = {"sent": 0, "success": 0, "failed": 0, "current_proxy": "None"}
 
 def get_hwid():
@@ -149,8 +172,8 @@ def inject_stealth(text):
     if not text: return ""
     inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
     res = ""
-    for list_idx in range(len(text)):
-        res += text[list_idx]
+    for char in text:
+        res += char
         if random.random() > 0.7:
             res += random.choice(inv_chars)
     return res
@@ -184,7 +207,7 @@ def print_banner():
 ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
 """
     console.print(banner, style="bold magenta")
-    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v4.9[/bold cyan]\n[blue]Ultra Speed & Robust Logger Edition[/blue]", box=box.ROUNDED, style="bold blue"))
+    console.print(Panel("[bold cyan]MagxxicVOT XII Python Edition v5.0[/bold cyan]\n[blue]Ultra Speed & Tag Preservation Edition[/blue]", box=box.ROUNDED, style="bold blue"))
 
 def analyze_spam():
     console.print("\n[bold yellow]--- Campaign Spam Analysis ---[/bold yellow]")
@@ -249,15 +272,21 @@ def replace_tags(text, replacements, is_attachment=False):
     domain = replacements.get("-emaildomain-") or (email.split("@")[1] if "@" in email else "")
     domainname = replacements.get("-emaildomainname-") or (domain.split(".")[0] if "." in domain else domain)
 
+    def rand_1_9():
+        digits = random.randint(1, 9)
+        return str(random.randint(10**(digits-1), 10**digits - 1))
+
     tag_map = {
         r'\[-email-\]': email, r'\[email\]': email,
         r'\[-emailuser-\]': user, r'\[user\]': user,
+        r'\[-emailusername-\]': user, r'\[username\]': user,
         r'\[-emaildomain-\]': domain, r'\[domain\]': domain,
         r'\[-emaildomainname-\]': domainname, r'\[domainname\]': domainname,
         r'\[-time-\]': datetime.now().strftime("%H:%M:%S"), r'\[time\]': datetime.now().strftime("%H:%M:%S"),
         r'\[-date-\]': datetime.now().strftime("%Y-%m-%d"), r'\[date\]': datetime.now().strftime("%Y-%m-%d"),
         r'\[-randomnumber-\]': lambda: str(random.randint(1000, 9999)),
         r'\[randomnumber\]': lambda: str(random.randint(1000, 9999)),
+        r'\[-randomnumber1-9-\]': rand_1_9,
         r'\[-randomstring-\]': lambda: ''.join(random.choices(string.ascii_letters + string.digits, k=10)),
         r'\[randomstring\]': lambda: ''.join(random.choices(string.ascii_letters + string.digits, k=10)),
         r'\[-randomhex-\]': lambda: os.urandom(4).hex(),
@@ -386,8 +415,8 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
         target_lang = COUNTRY_LANG_MAP.get(cc)
 
         if target_lang and target_lang != 'en':
-            letter_html = translate_html(letter_html, target_lang)
-            final_subject = translate_text(final_subject, target_lang)
+            letter_html = translate_protected(letter_html, target_lang)
+            final_subject = translate_protected(final_subject, target_lang)
 
     msg["Subject"] = replace_tags(final_subject, reps, False)
 
@@ -438,7 +467,7 @@ def send_single_email(target_email, smtp, proxy, reps, letter_path, subject_line
 
         if CONFIG["encrypt_attachment"]: data = encrypt_attachment(data, CONFIG["encryption_password"]); filename += ".enc"
 
-        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base64(part)
+        part = MIMEBase(*ctype.split("/")); part.set_payload(data); encoders.encode_base_64(part)
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         msg.attach(part)
 
@@ -588,7 +617,7 @@ def run():
                     letters = [f for f in os.listdir(CONFIG["letters_dir"]) if f.endswith(".html")]
                     if not letters: raise Exception("letters/ is empty.")
                     reps = {"-email-": CONFIG["test_email"]}
-                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Verification [randomnumber] [date]")
+                    send_single_email(CONFIG["test_email"], smtp, None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "SMTP Verification [-randomnumber1-9-] [-date-]")
                     console.print(f"[bold green][OK] SMTP {i+1}: {smtp['host']} - Sent.[/bold green]")
                 except Exception as e:
                     console.print(f"[bold red][FAIL] SMTP {i+1}: {smtp['host']} - {e}[/bold red]")
@@ -612,7 +641,7 @@ def run():
             links = [l.strip() for l in open(CONFIG["links_path"]).readlines() if l.strip()]
             if not smtps or not letters: raise Exception("Missing SMTP or Letter.")
             reps = {"-email-": CONFIG["test_email"]}
-            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification [randomnumber] [date]")
+            send_single_email(CONFIG["test_email"], smtps[0], None, reps, os.path.join(CONFIG["letters_dir"], letters[0]), "Final Verification [-randomnumber1-9-] [-date-]")
             console.print("[bold green]Test email sent successfully! Check your inbox.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Test email failed: {e}[/bold red]")
