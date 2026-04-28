@@ -2,3 +2,4 @@ img2pdf
 reportlab
 rich
 pypdf
+Pillow
