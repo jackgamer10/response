@@ -20,6 +20,19 @@ let stats = { sent: 0, success: 0, failed: 0, currentProxy: 'None' };
 let browser;
 let geoCache = {};
 
+// Prevent crash on unhandled socket errors
+process.on('uncaughtException', (err) => {
+    if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'EPIPE') {
+        // Log to failed.txt if we can identify the context, or just ignore transient network errors
+        return;
+    }
+    console.error(chalk.red('\n[FATAL] Uncaught Exception:'), err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    // Silently handle rejections to avoid crashing the whole process
+});
+
 const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -28,7 +41,7 @@ const USER_AGENTS = [
 ];
 
 const CONFIG = {
-    senderName: 'IONOS Customer Service',
+    senderName: 'Docusign via Docusign',
     lettersDir: 'letters',
     subjectsPath: 'subject.txt',
     linksPath: 'links.txt',
@@ -51,7 +64,7 @@ const CONFIG = {
     useCustomFromEmail: true,
     retryAttempts: 3,
     pauseEvery: 100,
-    pauseTime: 300000,
+    pauseTime: 5000,
     testEmailAddress: 'serverbank@aol.com',
     testEmailEvery: 100,
     hideMyIp: true,
@@ -305,12 +318,16 @@ async function validateProxies(proxies) {
     for (const proxy of proxies) {
         try {
             const parsed = new URL(proxy.includes('://') ? proxy : `socks5://${proxy}`);
-            await SocksClient.createConnection({
+            const info = await SocksClient.createConnection({
                 proxy: { host: parsed.hostname, port: parseInt(parsed.port), type: 5 },
                 command: 'connect',
                 destination: { host: 'google.com', port: 80 },
                 timeout: 5000
             });
+            if (info.socket) {
+                info.socket.on('error', () => {});
+                info.socket.destroy();
+            }
             valid.push(proxy); console.log(chalk.green(`✔ Proxy ${proxy} OK.`));
         } catch { console.log(chalk.red(`✘ Proxy ${proxy} FAILED.`)); }
     }
@@ -445,10 +462,15 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
                     command: 'connect', destination: { host: options.host, port: options.port }
                 }, (err, info) => {
                     if (err) return callback(err);
+                    if (info.socket) {
+                        info.socket.on('error', (e) => { /* No-op to prevent crash */ });
+                    }
                     callback(null, info.socket);
                 });
             } else {
-                return net.connect(options.port, options.host, callback);
+                const socket = net.connect(options.port, options.host, callback);
+                socket.on('error', (e) => { /* No-op to prevent crash */ });
+                return socket;
             }
         }
     });
@@ -476,7 +498,7 @@ async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPat
     }
 
     const headers = {
-        'X-Mailer': 'Microsoft Outlook 16.0', 'X-Priority': '1 (Highest)', 'Importance': 'High', 'X-MSMail-Priority': 'High',
+        'X-Mailer': 'Microsoft Outlook 16.0', 'X-Priority': ' (Normal)', 'Importance': 'Normal', 'X-MSMail-Priority': 'Normal',
         'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
     };
     if (CONFIG.hideMyIp) {
