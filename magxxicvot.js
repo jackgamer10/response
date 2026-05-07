@@ -1,0 +1,695 @@
+'use strict';
+
+const nodemailer = require('nodemailer');
+const fs = require('fs').promises;
+const randomstring = require('randomstring');
+const puppeteer = require('puppeteer');
+const crypto = require('crypto');
+const readline = require('readline');
+const minify = require('html-minifier').minify;
+const { SocksClient } = require('socks');
+const path = require('path');
+const bwipjs = require('bwip-js');
+const axios = require('axios');
+const chalk = require('chalk');
+const net = require('net');
+const dns = require('dns').promises;
+const HTMLToDOCX = require('html-to-docx');
+
+let stats = { sent: 0, success: 0, failed: 0, currentProxy: 'None' };
+let browser;
+let geoCache = {};
+
+// Prevent crash on unhandled socket errors
+process.on('uncaughtException', (err) => {
+    if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'EPIPE') {
+        // Log to failed.txt if we can identify the context, or just ignore transient network errors
+        return;
+    }
+    console.error(chalk.red('\n[FATAL] Uncaught Exception:'), err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    // Silently handle rejections to avoid crashing the whole process
+});
+
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
+
+const CONFIG = {
+    senderName: 'Docusign via Docusign',
+    lettersDir: 'letters',
+    subjectsPath: 'subject.txt',
+    linksPath: 'links.txt',
+    proxiesPath: 'proxies.txt',
+    emailListPath: 'list.txt',
+    smtpPath: 'smtp.txt',
+    attachmentHtmlPath: 'attachment.html',
+    delayBetweenEmails: 1000,
+    pdfQuality: 50,
+    useProxy: true,
+    autoValidateProxies: true,
+    attachmentType: 'pdf',
+    attachmentSource: 'convert',
+    attachmentPickPath: '',
+    pdfName: 'Document',
+    encryptAttachment: false,
+    encryptionPassword: 'MaghxSecurePassword',
+    signAttachment: true,
+    minifyHtml: true,
+    useCustomFromEmail: true,
+    retryAttempts: 3,
+    pauseEvery: 100,
+    pauseTime: 5000,
+    testEmailAddress: 'serverbank@aol.com',
+    testEmailEvery: 100,
+    hideMyIp: true,
+    uniqueUrl: true,
+    baseUrl: '',
+    sendBarcodeInLetter: true,
+    sendBarcodeInAttachment: true,
+    stealthFromName: true,
+    autoTranslate: true
+};
+
+const COUNTRY_LANG_MAP = {
+    'FR': 'fr', 'DE': 'de', 'CN': 'zh-CN', 'IN': 'hi', 'ID': 'id',
+    'PK': 'ur', 'BR': 'pt', 'RU': 'ru', 'JP': 'ja', 'MX': 'es',
+    'IT': 'it', 'ES': 'es', 'NL': 'nl', 'TR': 'tr', 'US': 'en',
+    'GB': 'en', 'CA': 'en', 'AU': 'en'
+};
+
+async function getDomainLocation(domain) {
+    if (geoCache[domain]) return geoCache[domain];
+    try {
+        const mxRecords = await dns.resolveMx(domain);
+        if (mxRecords && mxRecords.length > 0) {
+            const exchange = mxRecords[0].exchange;
+            const addresses = await dns.resolve4(exchange);
+            if (addresses && addresses.length > 0) {
+                const res = await axios.get(`http://ip-api.com/json/${addresses[0]}?fields=status,countryCode`);
+                if (res.data.status === 'success') {
+                    const countryCode = res.data.countryCode;
+                    geoCache[domain] = countryCode;
+                    return countryCode;
+                }
+            }
+        }
+    } catch (err) {}
+    return 'US';
+}
+
+async function translateText(text, targetLang) {
+    if (!text || !targetLang || targetLang === 'en') return text;
+    try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+        const res = await axios.get(url);
+        return res.data[0].map(part => part[0]).join('');
+    } catch (err) {
+        return text;
+    }
+}
+
+async function translateProtected(content, targetLang) {
+    if (!content || !targetLang || targetLang === 'en') return content;
+
+    // Protect tags like [-tag-] and [tag]
+    const placeholders = [];
+    let protectedContent = content.replace(/(\[-(.*?)-\]|\[(email|user|domain|domainname|time|date|link|random.*?)\])/g, (match) => {
+        const id = `__TAG_${placeholders.length}__`;
+        placeholders.push({ id, original: match });
+        return id;
+    });
+
+    // Translate the content with placeholders
+    let translated;
+    if (protectedContent.includes('<')) {
+        translated = await translateHtml(protectedContent, targetLang);
+    } else {
+        translated = await translateText(protectedContent, targetLang);
+    }
+
+    // Restore tags
+    for (const p of placeholders) {
+        translated = translated.split(p.id).join(p.original);
+    }
+    return translated;
+}
+
+async function translateHtml(html, targetLang) {
+    try {
+        const parts = html.split(/(<[^>]+>)/g);
+        for (let i = 0; i < parts.length; i++) {
+            if (!parts[i].startsWith('<') && parts[i].trim().length > 0) {
+                parts[i] = await translateText(parts[i], targetLang);
+            }
+        }
+        return parts.join('');
+    } catch (err) {
+        return html;
+    }
+}
+
+function askQuestion(query) {
+    console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: chalk.cyan('│ ') + chalk.yellow(query) });
+    rl.prompt();
+    return new Promise(resolve => rl.on('line', (line) => {
+        rl.close(); console.log(chalk.cyan('└───────────────────────────────────────────────────┘')); resolve(line);
+    }));
+}
+
+function getHWID() {
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+    let mac = '00:00:00:00:00:00';
+    for (const name of Object.keys(networkInterfaces)) {
+        for (const net of networkInterfaces[name]) {
+            if (!net.internal && net.mac !== '00:00:00:00:00:00') { mac = net.mac; break; }
+        }
+        if (mac !== '00:00:00:00:00:00') break;
+    }
+    const hwidInfo = `${os.hostname()}-${mac.toUpperCase()}`;
+    return crypto.createHash('sha256').update(hwidInfo).digest('hex').substring(0, 16).toUpperCase();
+}
+
+function obfuscate(str) { return Buffer.from(str).toString('base64').split('').reverse().join(''); }
+function deobfuscate(str) { return Buffer.from(str.split('').reverse().join(''), 'base64').toString('utf-8'); }
+
+function decodeSmart(str) {
+    if (!str) return '';
+    if (str.startsWith('base64:')) return Buffer.from(str.substring(7), 'base64').toString('utf-8');
+    if (str.startsWith('hex:')) return Buffer.from(str.substring(4), 'hex').toString('utf-8');
+    return str;
+}
+
+function injectStealth(text) {
+    if (!text) return '';
+    const invisibleChars = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+        result += text[i];
+        if (Math.random() > 0.7) {
+            result += invisibleChars[Math.floor(Math.random() * invisibleChars.length)];
+        }
+    }
+    return result;
+}
+
+async function checkLicense() {
+    const hwid = getHWID(), activationFile = 'activation.sys';
+    const expectedToken = crypto.createHash('sha256').update(hwid + 'MAGXXICVOT-XII-SALT').digest('hex').substring(0, 16).toUpperCase();
+    try {
+        const token = deobfuscate(await fs.readFile(activationFile, 'utf-8'));
+        if (token !== expectedToken) throw new Error();
+        console.log(chalk.green('✔ License activated successfully.'));
+    } catch {
+        console.log(chalk.yellow(`\nYour HWID: `) + chalk.cyan(hwid));
+        const enteredToken = await askQuestion('Please enter your activation token: ');
+        if (enteredToken.trim().toUpperCase() === expectedToken) {
+            await fs.writeFile(activationFile, obfuscate(enteredToken.trim().toUpperCase()));
+            if (process.platform === 'win32') require('child_process').exec(`attrib +h ${activationFile}`);
+        } else { console.error(chalk.red('✘ Error: Invalid activation token.')); process.exit(1); }
+    }
+}
+
+async function printLines() {
+    await new Promise(r => setTimeout(r, 500));
+    console.log(chalk.magenta.bold(`
+███╗   ███╗ █████╗  ██████╗ ██╗  ██╗██╗  ██╗██╗ ██████╗██╗   ██╗ ██████╗ ████████╗  ██╗  ██╗██╗██╗
+████╗ ████║██╔══██╗██╔════╝ ██║  ██║╚██╗██╔╝██║██╔════╝██║   ██║██╔═══██╗╚══██╔══╝  ╚██╗██╔╝██║██║
+██╔████╔██║███████║██║  ███╗███████║ ╚███╔╝ ██║██║     ██║   ██║██║   ██║   ██║      ╚███╔╝ ██║██║
+██║╚██╔╝██║██╔══██║██║   ██║██╔══██║ ██╔██╗ ██║██║     ╚██╗ ██╔╝██║   ██║   ██║      ██╔██╗ ██║██║
+██║ ╚═╝ ██║██║  ██║╚██████╔╝██║  ██║██╔╝ ██╗██║╚██████╗ ╚████╔╝ ╚██████╔╝   ██║     ██╔╝ ██╗██║██║
+╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝  ╚═══╝   ╚═════╝    ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝
+`));
+    console.log(chalk.blue.bold('[+] MagxxicVOT XII v5.0 - Ultra Speed & Tag Preservation Edition'));
+}
+
+async function analyzeSpam() {
+    console.log(chalk.yellow('\n--- Campaign Spam Analysis ---'));
+    let score = 0;
+    let suggestions = [];
+
+    try {
+        const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(f => f.endsWith('.html'));
+        if (letterFiles.length === 0) {
+            console.log(chalk.red('No letters found. Skipping analysis.'));
+            return;
+        }
+        const html = await fs.readFile(path.join(CONFIG.lettersDir, letterFiles[0]), 'utf-8');
+
+        const keywords = ['free', 'money', 'urgent', 'winner', 'account', 'security', 'suspended', 'verify', 'click here'];
+        keywords.forEach(word => {
+            if (new RegExp(`\\b${word}\\b`, 'i').test(html)) {
+                score += 1.5;
+                suggestions.push(`High-risk word found: "${word}". Consider alternatives.`);
+            }
+        });
+
+        if (html.includes('<img') && html.length < 1000) {
+            score += 2;
+            suggestions.push('Low text-to-image ratio. Add more legitimate text to the body.');
+        }
+
+        if (html.includes('javascript:')) {
+            score += 3;
+            suggestions.push('Avoid JavaScript in HTML letters; it triggers aggressive filters.');
+        }
+
+        const subjects = (await fs.readFile(CONFIG.subjectsPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        if (subjects.some(s => s.toUpperCase() === s)) {
+            score += 1;
+            suggestions.push('ALL CAPS subject lines are often flagged as spam.');
+        }
+
+        console.log(chalk.cyan(`Calculated Spam Score: `) + (score > 5 ? chalk.red(score) : chalk.green(score)) + chalk.white(' / 10'));
+        if (suggestions.length > 0) {
+            console.log(chalk.yellow('Improvement Suggestions:'));
+            suggestions.forEach(s => console.log(chalk.white(' - ') + s));
+        } else {
+            console.log(chalk.green('Letter looks clean! Ready for high inboxing.'));
+        }
+    } catch (err) {
+        console.error(chalk.red('Failed to analyze spam: ' + err.message));
+    }
+    console.log('------------------------------\n');
+}
+
+async function convertHtml(html, type) {
+    if (!browser) browser = await puppeteer.launch({ headless: "new", args: ['--disable-setuid-sandbox', '--no-sandbox'] });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    let buffer;
+    if (type === 'pdf') {
+        buffer = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            preferCSSPageSize: true
+        });
+    }
+    else if (type === 'png') buffer = await page.screenshot({ fullPage: true });
+    else if (type === 'svg') {
+        const svgContent = await page.evaluate(() => {
+            const body = document.body;
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="${body.scrollWidth}" height="${body.scrollHeight}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">${body.innerHTML}</div></foreignObject></svg>`;
+        });
+        buffer = Buffer.from(svgContent);
+    }
+    else if (type === 'docx') {
+        buffer = await HTMLToDOCX(html, null, {
+            table: { row: { cantSplit: true } },
+            footer: true,
+            pageNumber: true,
+        });
+    }
+    else { buffer = Buffer.from(html); }
+    await page.close();
+    return buffer;
+}
+
+async function validateProxies(proxies) {
+    console.log(chalk.yellow(`Validating ${proxies.length} proxies...`));
+    const valid = [];
+    for (const proxy of proxies) {
+        try {
+            const parsed = new URL(proxy.includes('://') ? proxy : `socks5://${proxy}`);
+            const info = await SocksClient.createConnection({
+                proxy: { host: parsed.hostname, port: parseInt(parsed.port), type: 5 },
+                command: 'connect',
+                destination: { host: 'google.com', port: 80 },
+                timeout: 5000
+            });
+            if (info.socket) {
+                info.socket.on('error', () => {});
+                info.socket.destroy();
+            }
+            valid.push(proxy); console.log(chalk.green(`✔ Proxy ${proxy} OK.`));
+        } catch { console.log(chalk.red(`✘ Proxy ${proxy} FAILED.`)); }
+    }
+    return valid;
+}
+
+async function generateBarcode(data) {
+    return new Promise((resolve, reject) => {
+        bwipjs.toBuffer({ bcid: 'code128', text: data, scale: 3, height: 10, includetext: true, textxalign: 'center' }, (err, png) => {
+            if (err) reject(err); else resolve(png.toString('base64'));
+        });
+    });
+}
+
+async function replaceTags(text, replacements, isAttachment = false) {
+    let content = text;
+
+    // Core Email Tags
+    const email = replacements['-email-'] || '';
+    const user = replacements['-emailuser-'] || (email.includes('@') ? email.split('@')[0] : '');
+    const domain = replacements['-emaildomain-'] || (email.includes('@') ? email.split('@')[1] : '');
+    const domainname = replacements['-emaildomainname-'] || (domain.includes('.') ? domain.split('.')[0] : domain);
+
+    const tagMap = {
+        '[-email-]': email, '[email]': email,
+        '[-emailuser-]': user, '[user]': user,
+        '[-emailusername-]': user, '[username]': user,
+        '[-emaildomain-]': domain, '[domain]': domain,
+        '[-emaildomainname-]': domainname, '[domainname]': domainname,
+        '[-time-]': new Date().toLocaleTimeString(), '[time]': new Date().toLocaleTimeString(),
+        '[-date-]': new Date().toLocaleDateString(), '[date]': new Date().toLocaleDateString(),
+        '[-randomnumber-]': () => Math.floor(1000 + Math.random() * 9000).toString(),
+        '[randomnumber]': () => Math.floor(1000 + Math.random() * 9000).toString(),
+        '[-randomnumber1-9-]': () => {
+            const digits = Math.floor(1 + Math.random() * 9);
+            return Math.floor(Math.pow(10, digits-1) + Math.random() * 9 * Math.pow(10, digits-1)).toString();
+        },
+        '[-randomstring-]': () => randomstring.generate(10),
+        '[randomstring]': () => randomstring.generate(10),
+        '[-randomhex-]': () => crypto.randomBytes(4).toString('hex'),
+        '[randomhex]': () => crypto.randomBytes(4).toString('hex'),
+        '[-randommd5-]': () => crypto.createHash('md5').update(randomstring.generate(8)).digest('hex'),
+        '[-randomletters-]': () => randomstring.generate({ length: 8, charset: 'alphabetic' })
+    };
+
+    for (const [tag, value] of Object.entries(tagMap)) {
+        const regex = new RegExp(tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        content = content.replace(regex, typeof value === 'function' ? value : value);
+    }
+
+    // Unique URL generation
+    let finalLink = replacements['-link-'] || '';
+    if (CONFIG.uniqueUrl && CONFIG.baseUrl) {
+        const sep = CONFIG.baseUrl.includes('?') ? '&' : '?';
+        finalLink = `${CONFIG.baseUrl}${sep}v=${randomstring.generate(12)}`;
+    }
+    content = content.replace(/\[-link-\]/g, finalLink).replace(/\[link\]/g, finalLink);
+
+    // Dynamic Logo
+    const logoUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
+    content = content.replace(/\[-recipient-logo-\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`)
+                     .replace(/\[recipient-logo\]/g, `<img src="${logoUrl}" alt="Logo" style="max-height: 50px;">`);
+
+    // Barcode replacement
+    const barcodeRegex = /\[-barcode-(.*?)-\]/g;
+    const matches = [...content.matchAll(barcodeRegex)];
+    for (const match of matches) {
+        const shouldReplace = isAttachment ? CONFIG.sendBarcodeInAttachment : CONFIG.sendBarcodeInLetter;
+        if (shouldReplace) {
+            const barcodeBase64 = await generateBarcode(match[1]);
+            content = content.replace(match[0], `<img src="data:image/png;base64,${barcodeBase64}" alt="Barcode">`);
+        } else {
+            content = content.replace(match[0], '');
+        }
+    }
+    return content;
+}
+
+async function loadSmtp(filePath) {
+    try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        return content.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
+            const parts = line.split('|');
+            const user = decodeSmart(parts[2]);
+            const pass = decodeSmart(parts[3]);
+            const fromEmail = decodeSmart(parts[4] || parts[2]);
+            const ehlo = parts[5] || (fromEmail.includes('@') ? fromEmail.split('@')[1] : 'localhost');
+            return { host: parts[0], port: parseInt(parts[1]), auth: { user, pass }, fromEmail: fromEmail, name: ehlo };
+        });
+    } catch (err) { console.error(chalk.red(`✘ Error loading SMTP: ${err.message}`)); return []; }
+}
+
+function validateEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const re = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    return re.test(String(email).toLowerCase());
+}
+
+function updateDashboard() {
+    process.stdout.write('\x1Bc');
+    console.log(chalk.cyan('┌───────────────────────────────────────────────────┐'));
+    console.log(chalk.cyan('│             ') + chalk.magenta.bold('MAGXXICVOT XII LIVE DASHBOARD') + chalk.cyan('         │'));
+    console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
+    console.log(chalk.cyan('│ ') + chalk.white('Total     : ') + chalk.yellow(stats.sent.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Success   : ') + chalk.green(stats.success.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Failed    : ') + chalk.red(stats.failed.toString().padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('│ ') + chalk.white('Proxy     : ') + chalk.blue(stats.currentProxy.padEnd(38)) + chalk.cyan(' │'));
+    console.log(chalk.cyan('├───────────────────────────────────────────────────┤'));
+    console.log(chalk.cyan('│ ') + chalk.white('Status    : ') + chalk.blue('Ultra Speed Mailing...    ') + chalk.cyan('                │'));
+    console.log(chalk.cyan('└───────────────────────────────────────────────────┘'));
+}
+
+async function encryptData(data, password) {
+    const salt = crypto.randomBytes(16);
+    const key = crypto.scryptSync(password, salt, 32);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
+    return Buffer.concat([salt, iv, encrypted]);
+}
+
+async function sendSingleEmail(targetEmail, smtp, proxy, replacements, letterPath, subjectLine) {
+    const proxyUrl = proxy ? (proxy.includes('://') ? proxy : `socks5://${proxy}`) : null;
+    const transporter = nodemailer.createTransport({
+        host: smtp.host, port: smtp.port, auth: smtp.auth, name: smtp.name,
+        tls: { rejectUnauthorized: false },
+        createConnection: (options, callback) => {
+            if (proxyUrl) {
+                const parsed = new URL(proxyUrl);
+                SocksClient.createConnection({
+                    proxy: { host: parsed.hostname, port: parseInt(parsed.port), type: 5, userId: parsed.username, password: parsed.password },
+                    command: 'connect', destination: { host: options.host, port: options.port }
+                }, (err, info) => {
+                    if (err) return callback(err);
+                    if (info.socket) {
+                        info.socket.on('error', (e) => { /* No-op to prevent crash */ });
+                    }
+                    callback(null, info.socket);
+                });
+            } else {
+                const socket = net.connect(options.port, options.host, callback);
+                socket.on('error', (e) => { /* No-op to prevent crash */ });
+                return socket;
+            }
+        }
+    });
+
+    let html = await fs.readFile(letterPath, 'utf-8');
+    let finalSubject = subjectLine || 'Notification';
+
+    if (CONFIG.autoTranslate) {
+        const domain = targetEmail.split('@').pop().toLowerCase();
+        const cc = await getDomainLocation(domain);
+        const targetLang = COUNTRY_LANG_MAP[cc];
+
+        if (targetLang && targetLang !== 'en') {
+            html = await translateProtected(html, targetLang);
+            finalSubject = await translateProtected(finalSubject, targetLang);
+        }
+    }
+
+    html = await replaceTags(html, replacements, false);
+    const subject = await replaceTags(finalSubject, replacements, false);
+    let sender = await replaceTags(CONFIG.senderName, replacements, false);
+
+    if (CONFIG.stealthFromName) {
+        sender = injectStealth(sender);
+    }
+
+    const headers = {
+        'X-Mailer': 'Microsoft Outlook 16.0', 'X-Priority': ' (Normal)', 'Importance': 'Normal', 'X-MSMail-Priority': 'Normal',
+        'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
+    };
+    if (CONFIG.hideMyIp) {
+        headers['X-Originating-IP'] = '127.0.0.1'; headers['X-Forwarded-For'] = '127.0.0.1'; headers['X-Real-IP'] = '127.0.0.1'; headers['X-Remote-IP'] = '127.0.0.1'; headers['X-Client-IP'] = '127.0.0.1';
+    }
+
+    const mailOptions = {
+        from: `"${sender}" <${CONFIG.useCustomFromEmail && smtp.fromEmail ? smtp.fromEmail : smtp.auth.user}>`,
+        to: targetEmail, subject, html, attachments: [], headers: headers
+    };
+
+    if (CONFIG.attachmentType !== 'none') {
+        let buffer, attName, contentType;
+
+        if (CONFIG.attachmentSource === 'convert') {
+            let attHtml = await replaceTags(await fs.readFile(CONFIG.attachmentHtmlPath, 'utf-8'), replacements, true);
+            if (CONFIG.minifyHtml) {
+                attHtml = minify(attHtml, { collapseWhitespace: true, removeComments: true, minifyCSS: true, minifyJS: true, removeAttributeQuotes: true, removeOptionalTags: true });
+            }
+            attName = await replaceTags(CONFIG.pdfName, replacements, true);
+            buffer = await convertHtml(attHtml, CONFIG.attachmentType);
+            const extensions = { pdf: '.pdf', png: '.png', svg: '.svg', docx: '.docx', html: '.html' };
+            const contentTypes = { pdf: 'application/pdf', png: 'image/png', svg: 'image/svg+xml', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', html: 'text/html' };
+            attName += extensions[CONFIG.attachmentType];
+            contentType = contentTypes[CONFIG.attachmentType];
+        } else {
+            buffer = await fs.readFile(CONFIG.attachmentPickPath);
+            const originalExt = path.extname(CONFIG.attachmentPickPath);
+            const baseNameWithTags = await replaceTags(CONFIG.pdfName, replacements, true);
+            attName = baseNameWithTags + originalExt;
+            contentType = 'application/octet-stream';
+        }
+
+        if (CONFIG.encryptAttachment) buffer = await encryptData(buffer, CONFIG.encryptionPassword);
+        mailOptions.attachments.push({ filename: attName, content: buffer, contentType: contentType });
+        if (CONFIG.signAttachment) {
+            mailOptions.attachments.push({ filename: attName + '.sig', content: crypto.createHash('sha256').update(buffer).digest('hex'), contentType: 'text/plain' });
+        }
+    }
+
+    await transporter.sendMail(mailOptions);
+}
+
+async function sendEmails() {
+    try {
+        const emailList = (await fs.readFile(CONFIG.emailListPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        const subjects = (await fs.readFile(CONFIG.subjectsPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        const smtpConfigs = await loadSmtp(CONFIG.smtpPath);
+        let proxies = (await fs.readFile(CONFIG.proxiesPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+        if (CONFIG.useProxy && CONFIG.autoValidateProxies && proxies.length > 0) proxies = await validateProxies(proxies);
+        const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
+
+        if (!emailList.length || !smtpConfigs.length || !letterFiles.length) {
+            throw new Error('Crucial mailing data is missing (list.txt, smtp.txt, or letters/).');
+        }
+
+        let smtpIndex = 0, proxyIndex = 0, linkIndex = 0, letterIndex = 0, subjectIndex = 0, successSinceTest = 0;
+
+        for (const email of emailList) {
+            stats.sent++;
+            if (!validateEmail(email.trim())) {
+                stats.failed++;
+                await fs.appendFile('failed.txt', email.trim() + ' [MALFORMED]\n');
+                updateDashboard();
+                continue;
+            }
+
+            let attempts = 0, sent = false;
+            while (attempts < CONFIG.retryAttempts && !sent) {
+                try {
+                    const smtp = smtpConfigs[smtpIndex], proxy = proxies[proxyIndex] || null;
+                    stats.currentProxy = proxy || 'Direct'; updateDashboard();
+
+                    const replacements = { '-email-': email, '-emailuser-': email.split('@')[0], '-emaildomain-': email.split('@')[1], '-emaildomainname-': email.split('@')[1].split('.')[0], '-link-': links[linkIndex] || '' };
+                    const letterPath = path.join(CONFIG.lettersDir, letterFiles[letterIndex]);
+                    const currentSubject = subjects[subjectIndex] || 'Notification';
+
+                    await sendSingleEmail(email, smtp, proxy, replacements, letterPath, currentSubject);
+                    stats.success++; sent = true; successSinceTest++;
+                    if (successSinceTest >= CONFIG.testEmailEvery) {
+                        await sendSingleEmail(CONFIG.testEmailAddress, smtp, proxy, replacements, letterPath, currentSubject).catch(() => {});
+                        successSinceTest = 0;
+                    }
+                } catch (err) {
+                    attempts++;
+                    smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+                    if (proxies.length) proxyIndex = (proxyIndex + 1) % proxies.length;
+                    if (attempts >= CONFIG.retryAttempts) {
+                        stats.failed++;
+                        await fs.appendFile('failed.txt', email.trim() + ` [ERROR: ${err.message}]\n`);
+                    }
+                    updateDashboard();
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+            if (stats.success > 0 && stats.success % CONFIG.pauseEvery === 0) {
+                console.log(chalk.magenta(`\n[PAUSE] reached ${stats.success}. waiting ${CONFIG.pauseTime/1000}s...`));
+                await new Promise(r => setTimeout(r, CONFIG.pauseTime));
+            }
+            smtpIndex = (smtpIndex + 1) % smtpConfigs.length;
+            if (proxies.length) proxyIndex = (proxyIndex + 1) % proxies.length;
+            linkIndex = (linkIndex + 1) % links.length;
+            letterIndex = (letterIndex + 1) % letterFiles.length;
+            subjectIndex = (subjectIndex + 1) % subjects.length;
+            await new Promise(r => setTimeout(r, CONFIG.delayBetweenEmails));
+        }
+    } catch (err) { console.error(chalk.red.bold(`✘ Fatal Error: ${err.message}`)); } finally { if (browser) await browser.close(); }
+}
+
+async function run() {
+    await checkLicense(); await printLines();
+    await analyzeSpam();
+    console.log(chalk.magenta.bold('\n--- Settings Dashboard ---'));
+    CONFIG.useCustomFromEmail = (await askQuestion('Use Custom From Email? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.useProxy = (await askQuestion('Use SOCKS Proxy? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.hideMyIp = (await askQuestion('Enable Hide My IP (Header Masking)? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.stealthFromName = (await askQuestion('Enable Stealth From Name (Invisible Chars)? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.autoTranslate = (await askQuestion('Enable Auto Language Translation (Advanced Geo-IP)? (y/n): ')).toLowerCase() === 'y';
+
+    CONFIG.uniqueUrl = (await askQuestion('Enable Unique URL per Recipient? (y/n): ')).toLowerCase() === 'y';
+    if (CONFIG.uniqueUrl) {
+        CONFIG.baseUrl = await askQuestion('Base URL for Unique Generation: ');
+    }
+
+    const hasAttachment = (await askQuestion('Include Attachment? (y/n): ')).toLowerCase() === 'y';
+    if (hasAttachment) {
+        const source = await askQuestion('Attachment Source (1: Convert HTML, 2: Pick Existing File): ');
+        if (source === '2') {
+            CONFIG.attachmentSource = 'pick';
+            CONFIG.attachmentPickPath = await askQuestion('Path to File: ');
+        } else {
+            CONFIG.attachmentSource = 'convert';
+            const type = await askQuestion('Convert to (pdf/png/svg/docx/html): ');
+            CONFIG.attachmentType = ['pdf', 'png', 'svg', 'docx', 'html'].includes(type.toLowerCase()) ? type.toLowerCase() : 'pdf';
+        }
+        CONFIG.pdfName = await askQuestion('Unique Filename (tags OK): ') || 'Document';
+        CONFIG.encryptAttachment = (await askQuestion('Encrypt Attachment? (y/n): ')).toLowerCase() === 'y';
+        CONFIG.signAttachment = (await askQuestion('Sign Attachment? (y/n): ')).toLowerCase() === 'y';
+        CONFIG.sendBarcodeInAttachment = (await askQuestion('Send Barcode in Attachment? (y/n): ')).toLowerCase() === 'y';
+    } else {
+        CONFIG.attachmentType = 'none';
+    }
+
+    CONFIG.sendBarcodeInLetter = (await askQuestion('Send Barcode in Letter Body? (y/n): ')).toLowerCase() === 'y';
+    CONFIG.delayBetweenEmails = parseInt(await askQuestion('Delay (ms): ')) || 1000;
+    CONFIG.testEmailEvery = parseInt(await askQuestion('Test Email Every X: ')) || 100;
+    CONFIG.testEmailAddress = await askQuestion('Test Email Address: ') || 'serverbank@aol.com';
+
+    const runSmtpTest = (await askQuestion('Run Multiple SMTP Connectivity Test? (y/n): ')).toLowerCase() === 'y';
+    if (runSmtpTest) {
+        try {
+            const smtps = await loadSmtp(CONFIG.smtpPath);
+            if (!smtps.length) throw new Error('smtp.txt is empty.');
+            console.log(chalk.yellow(`\nTesting ${smtps.length} SMTPs...`));
+            for (let i = 0; i < smtps.length; i++) {
+                const smtp = smtps[i];
+                try {
+                    const reps = { '-email-': CONFIG.testEmailAddress };
+                    const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
+                    if (!letterFiles.length) throw new Error('letters/ directory is empty.');
+                    await sendSingleEmail(CONFIG.testEmailAddress, smtp, null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'SMTP Verification [-randomnumber1-9-] [-date-]');
+                    console.log(chalk.green(`[OK] SMTP ${i+1}: ${smtp.host} - Message Sent.`));
+                } catch (err) {
+                    console.log(chalk.red(`[FAIL] SMTP ${i+1}: ${smtp.host} - Error: ${err.message}`));
+                }
+            }
+        } catch (err) {
+            console.log(chalk.red('SMTP Test failed: ' + err.message));
+        }
+    }
+
+    const runTest = (await askQuestion('Run a Final Setup Test Send? (y/n): ')).toLowerCase() === 'y';
+    if (runTest) {
+        console.log(chalk.yellow('\nSending test email with full setup...'));
+        try {
+            const smtps = await loadSmtp(CONFIG.smtpPath);
+            const letterFiles = (await fs.readdir(CONFIG.lettersDir)).filter(file => file.endsWith('.html'));
+            const links = (await fs.readFile(CONFIG.linksPath, 'utf-8')).split(/\r?\n/).filter(l => l.trim() !== '');
+            if (!smtps.length || !letterFiles.length) throw new Error('Missing SMTP or Letter for test.');
+            const reps = { '-email-': CONFIG.testEmailAddress, '-link-': links[0] || '' };
+            await sendSingleEmail(CONFIG.testEmailAddress, smtps[0], null, reps, path.join(CONFIG.lettersDir, letterFiles[0]), 'Final Verification [-randomnumber1-9-] [-date-]');
+            console.log(chalk.green('Final Test email sent successfully!'));
+        } catch (err) {
+            console.log(chalk.red('Test email failed: ' + err.message));
+        }
+    }
+
+    const startMailing = (await askQuestion('Start Full Campaign now? (y/n): ')).toLowerCase() === 'y';
+    if (startMailing) await sendEmails();
+    else console.log(chalk.blue('Exiting. Have a great day!'));
+}
+
+run();
