@@ -1,0 +1,2 @@
+http://example.com/login
+http://example.com/update

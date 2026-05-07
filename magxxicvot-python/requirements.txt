@@ -1,0 +1,12 @@
+rich
+requests
+python-barcode
+Pillow
+PySocks
+cryptography
+xhtml2pdf
+html2image
+minify-html
+psutil
+dnspython
+python-docx

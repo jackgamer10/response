@@ -1,0 +1,1 @@
+# Add SOCKS proxies here (e.g., socks5://user:pass@host:port)
